@@ -1,0 +1,39 @@
+name: Build iPad IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Unsigned iOS Release
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r CocoTrade-iPad.ipa Payload
+          mv CocoTrade-iPad.ipa ../../../
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocotrade-ipad-ipa
+          path: CocoTrade-iPad.ipa
+          retention-days: 5
