@@ -288,7 +288,7 @@ class GoogleDriveService {
       final prefs = await SharedPreferences.getInstance();
       _cachedUserEmail = prefs.getString(_emailPrefsKey);
 
-      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (!kIsWeb && Platform.isAndroid) {
         final GoogleSignIn googleSignIn = GoogleSignIn(
   clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
   scopes: _scopes,
@@ -332,7 +332,7 @@ class GoogleDriveService {
   static Future<bool> signIn() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (!kIsWeb && Platform.isAndroid) {
         final GoogleSignIn googleSignIn = GoogleSignIn(
   clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
   scopes: _scopes,
@@ -379,7 +379,7 @@ class GoogleDriveService {
 
   static Future<void> signOut() async {
     try {
-      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (!kIsWeb && Platform.isAndroid) {
         final GoogleSignIn googleSignIn = GoogleSignIn(
   clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
   scopes: _scopes,
