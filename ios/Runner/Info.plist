@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>cocotrade_erp</string>
+	<string>cocotradeerp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -81,7 +81,7 @@
         <key>CFBundleURLSchemes</key>
         <array>
             <!-- Reversed client ID from Google console -->
-            <string>com.googleusercontent.apps.1011382913553-qad37lf843tnj68r1cp720bel0scgkdm</string>
+           <string>com.googleusercontent.apps.1011382913553-qad37lf843tnj68r1cp720bel0scgkdm</string>
         </array>
     </dict>
 </array>
