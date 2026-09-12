@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'dart:convert';
@@ -28,9 +29,23 @@ import 'package:file_selector/file_selector.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     await windowManager.ensureInitialized();
+
+    const WindowOptions windowOptions = WindowOptions(
+      center: true,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.normal,
+    );
+
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+      await windowManager.maximize(); // Forces the window to open maximized
+    });
   }
+
   final prefs = await SharedPreferences.getInstance();
   final bool isFirstLoginDone = prefs.getBool('auth_first_login_completed_v2') ?? false;
 
@@ -203,14 +218,19 @@ class _CloudRestoreSetupScreenState extends State<CloudRestoreSetupScreen> {
 
 // ---------------- DIRECT AUTH CLIENT FOR ANDROID ----------------
 class GoogleAuthClient extends http.BaseClient {
-  final Map<String, String> _headers;
+  final GoogleSignIn _googleSignIn;
   final http.Client _client = http.Client();
 
-  GoogleAuthClient(this._headers);
+  GoogleAuthClient(this._googleSignIn);
 
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
-    return _client.send(request..headers.addAll(_headers));
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final account = _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
+    if (account != null) {
+      final freshHeaders = await account.authHeaders;
+      request.headers.addAll(freshHeaders);
+    }
+    return _client.send(request);
   }
 }
 
@@ -259,7 +279,7 @@ class GoogleDriveService {
         final account = await googleSignIn.signInSilently();
         if (account != null) {
           final authHeaders = await account.authHeaders;
-          _client = GoogleAuthClient(authHeaders);
+          _client = GoogleAuthClient(googleSignIn);
           _cachedUserEmail = account.email;
           await prefs.setString(_emailPrefsKey, account.email);
           return true;
@@ -305,7 +325,7 @@ class GoogleDriveService {
           if (!hasDriveScope) return false;
 
           final authHeaders = await account.authHeaders;
-          _client = GoogleAuthClient(authHeaders);
+          _client = GoogleAuthClient(googleSignIn);
           _cachedUserEmail = account.email;
           await prefs.setString(_emailPrefsKey, account.email);
           return true;
@@ -513,20 +533,22 @@ class Party {
 }
 
 class TruckEntry {
-  String id, state, date, truck, supplier, buyer, transporter, type, remarks;
+  String id, state, date, truck, supplier, buyer, transporter, type, remarks, invoiceNo;
   double qty, supplierBill, buyerBill, commission, transportExp, freight, advance, rate, bags, bagRate, loadRate, insurance, amc, loadManualAmt;
   bool isInvoice, isLoadManual;
 
+  DateTime? _cachedDt;
+  DateTime get parsedDate => _cachedDt ??= _MainLayoutScreenState.parseFlexibleDate(date);
+
   TruckEntry({
     required this.id, required this.state, required this.date, required this.truck, required this.supplier, required this.buyer, required this.transporter, required this.type, required this.qty, required this.supplierBill, required this.buyerBill, required this.commission, required this.transportExp, required this.freight, required this.advance,
-    this.isInvoice = false, this.rate = 0, this.bags = 0, this.bagRate = 0, this.loadRate = 0, this.insurance = 0, this.amc = 0, this.isLoadManual = false, this.loadManualAmt = 0, this.remarks = ''
+    this.isInvoice = false, this.invoiceNo = '', this.rate = 0, this.bags = 0, this.bagRate = 0, this.loadRate = 0, this.insurance = 0, this.amc = 0, this.isLoadManual = false, this.loadManualAmt = 0, this.remarks = ''
   });
 
   double get balance => freight - advance;
-  Map<String, dynamic> toJson() => {'id': id, 'state': state, 'date': date, 'truck': truck, 'supplier': supplier, 'buyer': buyer, 'transporter': transporter, 'type': type, 'qty': qty, 'supplierBill': supplierBill, 'buyerBill': buyerBill, 'commission': commission, 'transportExp': transportExp, 'freight': freight, 'advance': advance, 'isInvoice': isInvoice, 'rate': rate, 'bags': bags, 'bagRate': bagRate, 'loadRate': loadRate, 'insurance': insurance, 'amc': amc, 'isLoadManual': isLoadManual, 'loadManualAmt': loadManualAmt, 'remarks': remarks};
-  factory TruckEntry.fromJson(Map<String, dynamic> json) => TruckEntry(id: json['id'] ?? '', state: json['state'] ?? 'Andhra Pradesh', date: json['date'] ?? '', truck: json['truck'] ?? '', supplier: json['supplier'] ?? '', buyer: json['buyer'] ?? '', transporter: json['transporter'] ?? '', type: json['type'] ?? 'TENDER', qty: (json['qty'] as num?)?.toDouble() ?? 0, supplierBill: (json['supplierBill'] as num?)?.toDouble() ?? 0, buyerBill: (json['buyerBill'] as num?)?.toDouble() ?? 0, commission: (json['commission'] as num?)?.toDouble() ?? 0, transportExp: (json['transportExp'] as num?)?.toDouble() ?? 0, freight: (json['freight'] as num?)?.toDouble() ?? 0, advance: (json['advance'] as num?)?.toDouble() ?? 0, isInvoice: json['isInvoice'] ?? false, rate: (json['rate'] as num?)?.toDouble() ?? 0, bags: (json['bags'] as num?)?.toDouble() ?? 0, bagRate: (json['bagRate'] as num?)?.toDouble() ?? 0, loadRate: (json['loadRate'] as num?)?.toDouble() ?? 0, insurance: (json['insurance'] as num?)?.toDouble() ?? 0, amc: (json['amc'] as num?)?.toDouble() ?? 0, isLoadManual: json['isLoadManual'] ?? false, loadManualAmt: (json['loadManualAmt'] as num?)?.toDouble() ?? 0, remarks: json['remarks'] ?? '');
+  Map<String, dynamic> toJson() => {'id': id, 'state': state, 'date': date, 'truck': truck, 'supplier': supplier, 'buyer': buyer, 'transporter': transporter, 'type': type, 'qty': qty, 'supplierBill': supplierBill, 'buyerBill': buyerBill, 'commission': commission, 'transportExp': transportExp, 'freight': freight, 'advance': advance, 'isInvoice': isInvoice, 'invoiceNo': invoiceNo, 'rate': rate, 'bags': bags, 'bagRate': bagRate, 'loadRate': loadRate, 'insurance': insurance, 'amc': amc, 'isLoadManual': isLoadManual, 'loadManualAmt': loadManualAmt, 'remarks': remarks};
+  factory TruckEntry.fromJson(Map<String, dynamic> json) => TruckEntry(id: json['id'] ?? '', state: json['state'] ?? 'Andhra Pradesh', date: json['date'] ?? '', truck: json['truck'] ?? '', supplier: json['supplier'] ?? '', buyer: json['buyer'] ?? '', transporter: json['transporter'] ?? '', type: json['type'] ?? 'TENDER', qty: (json['qty'] as num?)?.toDouble() ?? 0, supplierBill: (json['supplierBill'] as num?)?.toDouble() ?? 0, buyerBill: (json['buyerBill'] as num?)?.toDouble() ?? 0, commission: (json['commission'] as num?)?.toDouble() ?? 0, transportExp: (json['transportExp'] as num?)?.toDouble() ?? 0, freight: (json['freight'] as num?)?.toDouble() ?? 0, advance: (json['advance'] as num?)?.toDouble() ?? 0, isInvoice: json['isInvoice'] ?? false, invoiceNo: json['invoiceNo'] ?? '', rate: (json['rate'] as num?)?.toDouble() ?? 0, bags: (json['bags'] as num?)?.toDouble() ?? 0, bagRate: (json['bagRate'] as num?)?.toDouble() ?? 0, loadRate: (json['loadRate'] as num?)?.toDouble() ?? 0, insurance: (json['insurance'] as num?)?.toDouble() ?? 0, amc: (json['amc'] as num?)?.toDouble() ?? 0, isLoadManual: json['isLoadManual'] ?? false, loadManualAmt: (json['loadManualAmt'] as num?)?.toDouble() ?? 0, remarks: json['remarks'] ?? '');
 }
-
 class BankAccount {
   String id, name, account, ifsc, branch, note;
   BankAccount({required this.id, required this.name, required this.account, required this.ifsc, required this.branch, this.note = "Please Credit to our Account only"});
@@ -535,16 +557,57 @@ class BankAccount {
 }
 
 class PaymentEntry {
-  String id, state, type, seller, buyer, mode, date;
+  String id, state, type, seller, buyer, mode, date, truckId;
   double amount, transportReceived, settlement, commissionAdjusted;
+  DateTime? _cachedDt;
+  DateTime get parsedDate => _cachedDt ??= _MainLayoutScreenState.parseFlexibleDate(date);
 
   PaymentEntry({
-    required this.id, required this.state, required this.type, required this.seller, required this.buyer, required this.amount, required this.transportReceived, required this.settlement, this.commissionAdjusted = 0.0, required this.mode, required this.date,
+    required this.id,
+    required this.state,
+    required this.type,
+    required this.seller,
+    required this.buyer,
+    required this.amount,
+    required this.transportReceived,
+    required this.settlement,
+    this.commissionAdjusted = 0.0,
+    required this.mode,
+    required this.date,
+    this.truckId = '',
   });
 
   String get party => type.contains("SELLER") ? seller : buyer;
-  Map<String, dynamic> toJson() => {'id': id, 'state': state, 'type': type, 'seller': seller, 'buyer': buyer, 'amount': amount, 'transportReceived': transportReceived, 'settlement': settlement, 'commissionAdjusted': commissionAdjusted, 'mode': mode, 'date': date};
-  factory PaymentEntry.fromJson(Map<String, dynamic> json) => PaymentEntry(id: json['id'] ?? '', state: json['state'] ?? 'Andhra Pradesh', type: json['type'] ?? 'PAYMENT TO SELLER', seller: json['seller'] ?? '', buyer: json['buyer'] ?? '', amount: (json['amount'] as num?)?.toDouble() ?? 0, transportReceived: (json['transportReceived'] as num?)?.toDouble() ?? 0, settlement: (json['settlement'] as num?)?.toDouble() ?? 0, commissionAdjusted: (json['commissionAdjusted'] as num?)?.toDouble() ?? 0, mode: json['mode'] ?? 'DIRECT', date: json['date'] ?? '');
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'state': state,
+    'type': type,
+    'seller': seller,
+    'buyer': buyer,
+    'amount': amount,
+    'transportReceived': transportReceived,
+    'settlement': settlement,
+    'commissionAdjusted': commissionAdjusted,
+    'mode': mode,
+    'date': date,
+    'truckId': truckId, // Saved to disk
+  };
+
+  factory PaymentEntry.fromJson(Map<String, dynamic> json) => PaymentEntry(
+    id: json['id'] ?? '',
+    state: json['state'] ?? 'Andhra Pradesh',
+    type: json['type'] ?? 'PAYMENT TO SELLER',
+    seller: json['seller'] ?? '',
+    buyer: json['buyer'] ?? '',
+    amount: (json['amount'] as num?)?.toDouble() ?? 0,
+    transportReceived: (json['transportReceived'] as num?)?.toDouble() ?? 0,
+    settlement: (json['settlement'] as num?)?.toDouble() ?? 0,
+    commissionAdjusted: (json['commissionAdjusted'] as num?)?.toDouble() ?? 0,
+    mode: json['mode'] ?? 'DIRECT',
+    date: json['date'] ?? '',
+    truckId: json['truckId'] ?? '', // Restored on load
+  );
 }
 
 class TransportPayment {
@@ -600,10 +663,23 @@ class GoodsItemController {
 // ---------------- SECURITY & ENCRYPTION ----------------
 class SecurityHelper {
   static final _key = enc.Key.fromUtf8('CocoTradeERP_SecureKey_2026_0907');
-  static final _iv = enc.IV.fromLength(16);
-  static final _encrypter = enc.Encrypter(enc.AES(_key));
-  static String encrypt(String rawData) => _encrypter.encrypt(rawData, iv: _iv).base64;
-  static String decrypt(String encryptedBase64) => _encrypter.decrypt(enc.Encrypted.fromBase64(encryptedBase64), iv: _iv);
+  
+  static String encrypt(String rawData) {
+    final iv = enc.IV.fromSecureRandom(16);
+    final encrypter = enc.Encrypter(enc.AES(_key));
+    final encrypted = encrypter.encrypt(rawData, iv: iv);
+    // Prepend IV base64 for decryption
+    return '${iv.base64}:${encrypted.base64}';
+  }
+
+  static String decrypt(String encryptedBase64) {
+    final parts = encryptedBase64.split(':');
+    if (parts.length != 2) throw Exception("Invalid encrypted format");
+    final iv = enc.IV.fromBase64(parts[0]);
+    final encrypted = enc.Encrypted.fromBase64(parts[1]);
+    final encrypter = enc.Encrypter(enc.AES(_key));
+    return encrypter.decrypt(encrypted, iv: iv);
+  }
 }
 
 // ---------------- LOCAL STORAGE MANAGER ----------------
@@ -669,7 +745,7 @@ class MainLayoutScreen extends StatefulWidget {
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
 }
 
-class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener {
+class _MainLayoutScreenState extends State<MainLayoutScreen> {
 
   static const String _prefFirstLoginKey = 'auth_first_login_completed_v2';
   static const String _prefEmailKey = 'auth_user_email';
@@ -686,7 +762,6 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   bool _isProfileSetupDone = false;
   int _trialDaysLeft = 2;
   bool _isTrialExpired = false;
-  bool _autoSyncOnExit = true;
   bool _hasCustomBuyerBill = false;
 
   String _companyName = "CocoTrade ERP";
@@ -703,6 +778,8 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   String _sellerMsgTemplate = "Trade Confirmed!\nDate: {date}\nBuyer: {buyer}\nCommodity: {type}\nRate: Rs. {rate}\n- {company}";
   String _buyerMsgTemplate = "Trade Confirmed!\nDate: {date}\nSeller: {seller}\nCommodity: {type}\nRate: Rs. {rate}\n- {company}";
   String _partyTypeFilter = 'ALL';
+  String _lastSyncTime = 'Never';
+
   final _partySearchCtrl = TextEditingController();
   final TextEditingController _sellerMsgCtrl = TextEditingController();
   final TextEditingController _buyerMsgCtrl = TextEditingController();
@@ -803,6 +880,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   double get _invTruckBalance => _invFreight - _invAdvance;
 
   String _payType = "PAYMENT TO SELLER", _paySeller = "", _payBuyer = "", _payMode = "DIRECT";
+  String _paySelectedTruckId = "";
   final _payTransportReceivedCtrl = TextEditingController(text: "0");
   final _payDateCtrl = TextEditingController();
   final _payAmountCtrl = TextEditingController(text: "0");
@@ -835,11 +913,11 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
 
   @override
   void initState() {
-    super.initState();
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-      windowManager.addListener(this);
-      windowManager.setPreventClose(true);
-    }
+    super.initState();  
+    // Triggers live due calculation when typing in payment fields
+    _payAmountCtrl.addListener(() => setState(() {}));
+    _paySettlementCtrl.addListener(() => setState(() {}));
+    _payCommAdjustedCtrl.addListener(() => setState(() {}));
     _selectedBank = _bankAccounts.first;
     _addGoodsRow(desc: "COCONUT", qty: "", rate: "");
 
@@ -870,25 +948,28 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
     _initAuthAndDrive();
   }
 
-  @override
-  void dispose() {
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-      windowManager.removeListener(this);
-    }
-    super.dispose();
-  }
+ 
+  static const MethodChannel _nativeSmsChannel = MethodChannel('com.cocotrade.sms/dispatch');
 
- @override
-  void onWindowClose() async {
-    final bool isPreventClose = await windowManager.isPreventClose();
-    if (isPreventClose) {
-      // Exit sync removed completely. Data is already safely committed 
-      // to local storage and Google Drive the moment you hit "Save".
-      await windowManager.destroy();
-    }
-  }
-   static const MethodChannel _nativeSmsChannel = MethodChannel('com.cocotrade.sms/dispatch');
+Future<void> _recordSyncTimestamp() async {
+  final now = DateTime.now();
+  final dd = now.day.toString().padLeft(2, '0');
+  final mm = now.month.toString().padLeft(2, '0');
+  final yy = now.year.toString();
+  final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
+  final minute = now.minute.toString().padLeft(2, '0');
+  final ampm = now.hour >= 12 ? 'PM' : 'AM';
 
+  final formatted = "$dd-$mm-$yy at $hour:$minute $ampm";
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('last_cloud_sync_time', formatted);
+
+  if (mounted) {
+    setState(() {
+      _lastSyncTime = formatted;
+    });
+  }
+}
   Future<void> _processPendingSmsQueue() async {
     if (kIsWeb || !Platform.isAndroid) return;
 
@@ -1027,6 +1108,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
    }
 
     Future<void> _initAuthAndDrive() async {
+      
     final prefs = await SharedPreferences.getInstance();
     await GoogleDriveService.initSilentLogin();
 
@@ -1038,10 +1120,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
     final savedInv = prefs.getString('company_invocation');
     if (savedInv != null && savedInv.trim().isNotEmpty) {
       _myCompany.invocation = savedInv.trim();
+    setState(() {
+  _lastSyncTime = prefs.getString('last_cloud_sync_time') ?? 'Never';
+    });
     }
 
     setState(() {
-      _autoSyncOnExit = prefs.getBool('auto_sync_on_exit') ?? true;
       _isProfileSetupDone = prefs.getBool('is_profile_setup_done') ?? false;
       _companyName = prefs.getString('company_name') ?? 'CocoTrade ERP';
       _companyPhone = prefs.getString('company_phone') ?? '';
@@ -1058,6 +1142,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
 
     if (_trucks.isNotEmpty) {
       _calculateOverdueBills(_trucks);
+      _updateNextInvoiceNumber();
     }
     }
 
@@ -1114,24 +1199,82 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
 
    String _generateFullDatabaseJson() => jsonEncode(_exportStateMap());
 
-    Future<void> _commitToLocalDrive() async {
-    Map<String, dynamic> appState = _exportStateMap();
-    
-    // 1. Instantly write to local device storage (fast & offline safe)
+    Timer? _saveDebounceTimer;
+
+Future<void> _commitToLocalDrive() async {
+  _saveDebounceTimer?.cancel();
+  _saveDebounceTimer = Timer(const Duration(milliseconds: 300), () async {
+    final appState = _exportStateMap();
     await LocalDriveManager.writeToDrive(appState);
 
-    // 2. Trigger Google Drive upload in the background without blocking the UI
     if (GoogleDriveService.currentCredentials != null) {
       Future.microtask(() async {
         try {
-          await GoogleDriveService.uploadDatabase(jsonEncode(appState));
+          // Ensure valid session before upload
+          bool active = await GoogleDriveService.initSilentLogin();
+          if (active) {
+            await GoogleDriveService.uploadDatabase(jsonEncode(appState));
+            await _recordSyncTimestamp();
+          }
         } catch (e) {
-          debugPrint("Background Cloud Sync Failed: $e");
+          debugPrint("Background sync skipped/failed safely: $e");
         }
       });
     }
+  });
+}
+void _markCustomBillAsPaid(dynamic truckEntry, double settleAmount, {bool isBuyerSide = false}) {
+  if (settleAmount <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('This bill is already fully settled!')),
+    );
+    return;
   }
 
+  final nowStr = formatDisplayDate(DateTime.now().toIso8601String());
+  final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+  setState(() {
+    _payments.add(PaymentEntry(
+      id: '${nowMs}_${isBuyerSide ? 'buyer' : 'seller'}',
+      state: _selectedState,
+      type: isBuyerSide ? "RECEIPT FROM BUYER" : "PAYMENT TO SELLER",
+      seller: truckEntry.supplier,
+      buyer: truckEntry.buyer,
+      amount: settleAmount,
+      transportReceived: 0,
+      settlement: 0,
+      mode: "DIRECT",
+      date: nowStr,
+      truckId: truckEntry.id, // Links directly to this statement row
+    ));
+    _calculateOverdueBills(_trucks);
+  });
+
+  _commitToLocalDrive();
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: const Color(0xFF047857),
+      content: Text('Recorded payment of ${money(settleAmount)} for ${truckEntry.buyer}'),
+    ),
+  );
+}
+void _updateNextInvoiceNumber() {
+  int maxNum = 0;
+  for (var t in _trucks) {
+    if (t.isInvoice == true) {
+      final rawDigits = t.invoiceNo.isNotEmpty
+          ? t.invoiceNo.replaceAll(RegExp(r'[^0-9]'), '')
+          : (t.truck.startsWith('INV-') ? t.truck.replaceAll(RegExp(r'[^0-9]'), '') : '');
+      final val = int.tryParse(rawDigits) ?? 0;
+      if (val > maxNum) maxNum = val;
+    }
+  }
+  if (_editingInvoiceId == null) {
+    _invNCtrl.text = "INV-${(maxNum + 1).toString().padLeft(5, '0')}";
+  }
+}
   void _applyStateFromMap(Map<String, dynamic> data) async {
     setState(() {
       if (data['smsQueue'] != null) {
@@ -1139,7 +1282,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
       }
       if (data['companyProfile'] != null) _myCompany = CompanyProfile.fromJson(data['companyProfile']);
       if (data['parties'] != null) _parties = (data['parties'] as List).map((i) => Party.fromJson(i)).toList();
-      if (data['trucks'] != null) _trucks = (data['trucks'] as List).map((i) => TruckEntry.fromJson(i)).toList();
+      if (data['trucks'] != null) _trucks = (data['trucks'] as List).map((i) => TruckEntry.fromJson(i)).toList();_updateNextInvoiceNumber();
       if (data['bankAccounts'] != null) {
         _bankAccounts = (data['bankAccounts'] as List).map((i) => BankAccount.fromJson(i)).toList();
         if (_bankAccounts.isNotEmpty) _selectedBank = _bankAccounts.first;
@@ -1169,6 +1312,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   void _performBackup() async {
     final success = await GoogleDriveService.uploadDatabase(_generateFullDatabaseJson());
     if (success && mounted) {
+      await _recordSyncTimestamp(); // <--- Add this
+      if (mounted) {
+  setState(() {});
+}     // <--- Refreshes the modal UI immediately
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Backup saved securely to Google Drive!')),
       );
@@ -1178,6 +1325,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   void _performRestore() async {
     final cloudData = await GoogleDriveService.downloadDatabase();
     if (cloudData != null && mounted) {
+      await _recordSyncTimestamp();
       _applyStateFromMap(cloudData);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Data restored successfully!')),
@@ -1238,7 +1386,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
 
   static DateTime parseFlexibleDate(String input) {
     if (input.trim().isEmpty) return DateTime(1970);
-    final clean = input.trim().replaceAll('/', '-');
+    final clean = input.trim().replaceAll('/', '-').replaceAll(' ', '-');
     try {
       final parts = clean.split('-');
       if (parts.length == 3) {
@@ -1374,38 +1522,125 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   }
 
   void _calculateOverdueBills(List<dynamic> allTrucks) {
-    final DateTime today = DateTime.now();
-    List<dynamic> overdue = [];
-    Map<String, double> buyerPaidMap = {};
-    for (var p in _payments) {
-      if (p.state != _selectedState || !p.type.contains("BUYER")) continue;
-      final buyerKey = p.buyer.toUpperCase();
-      buyerPaidMap[buyerKey] = (buyerPaidMap[buyerKey] ?? 0) + p.amount + p.settlement + p.commissionAdjusted;
+  final DateTime today = DateTime.now();
+  List<Map<String, dynamic>> overdue = [];
+
+  // 1. Separate truck-specific payments from general unallocated payments
+  final validPayments = _payments.where((p) => p.state == _selectedState).toList();
+  validPayments.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
+
+  Map<String, double> directTruckBuyerPaid = {};
+  Map<String, double> directTruckSellerPaid = {};
+  List<Map<String, dynamic>> unallocatedBuyerBuckets = [];
+  List<Map<String, dynamic>> unallocatedSellerBuckets = [];
+
+  for (var p in validPayments) {
+    final double totalPay = ((p.amount ?? 0) as num).toDouble() +
+        ((p.settlement ?? 0) as num).toDouble() +
+        ((p.commissionAdjusted ?? 0) as num).toDouble();
+
+    final bool isBuyer = p.type.contains("BUYER") || (p.mode == "DIRECT" && !p.id.endsWith("_seller"));
+    final bool isSeller = p.type.contains("SELLER") || (p.mode == "DIRECT" && !p.id.endsWith("_buyer"));
+
+    // If linked to a specific bill/truck
+    if (p.truckId.isNotEmpty) {
+      if (isBuyer) {
+        directTruckBuyerPaid[p.truckId] = (directTruckBuyerPaid[p.truckId] ?? 0.0) + totalPay;
+      }
+      if (isSeller) {
+        directTruckSellerPaid[p.truckId] = (directTruckSellerPaid[p.truckId] ?? 0.0) + totalPay;
+      }
+    } else {
+      // General on-account payments (FIFO)
+      if (isBuyer) {
+        unallocatedBuyerBuckets.add({'entry': p, 'remaining': totalPay});
+      }
+      if (isSeller) {
+        unallocatedSellerBuckets.add({'entry': p, 'remaining': totalPay});
+      }
     }
+  }
 
-    List<dynamic> sortedTrucks = List.from(allTrucks.where((t) => t.state == _selectedState && (t.buyerBill > 0 || t.supplierBill > 0)));
-    sortedTrucks.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
+  // 2. Sort trucks chronologically
+  List<dynamic> sortedTrucks = List.from(allTrucks.where((t) =>
+      t.state == _selectedState &&
+      (t.buyerBill > 0 || t.supplierBill > 0)));
+  sortedTrucks.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
 
-    for (var t in sortedTrucks) {
-      final buyerKey = t.buyer.toUpperCase();
-      final double billAmount = t.buyerBill > 0 ? t.buyerBill : t.supplierBill;
-      double paidSoFar = buyerPaidMap[buyerKey] ?? 0.0;
+  for (var t in sortedTrucks) {
+    final String bKey = t.buyer.toString().trim().toUpperCase();
+    final String sKey = t.supplier.toString().trim().toUpperCase();
 
-      if (paidSoFar >= billAmount) {
-        buyerPaidMap[buyerKey] = paidSoFar - billAmount;
-      } else {
-        buyerPaidMap[buyerKey] = 0;
-        final balancePending = billAmount - paidSoFar;
-        final int daysSinceEntry = today.difference(parseFlexibleDate(t.date)).inDays;
+    final double bBill = (t.buyerBill > 0) ? t.buyerBill : t.supplierBill;
+    final double sBill = t.supplierBill;
 
-        if (daysSinceEntry > 10 && balancePending > 0) {
-          t.remarks = balancePending.toString();
-          overdue.add(t);
+    // Start with payments explicitly linked to this bill
+    double bPaid = directTruckBuyerPaid[t.id] ?? 0.0;
+    double sPaid = directTruckSellerPaid[t.id] ?? 0.0;
+
+    // Allocate on-account payments only if bill is not cleared
+    if (bPaid < bBill) {
+      for (var bucket in unallocatedBuyerBuckets) {
+        if ((bucket['remaining'] as double) <= 0) continue;
+        final p = bucket['entry'] as PaymentEntry;
+        final pBuyer = p.buyer.trim().toUpperCase();
+        final pSeller = p.seller.trim().toUpperCase();
+
+        if (pBuyer == bKey && (pSeller.isEmpty || sKey.isEmpty || pSeller == sKey) && pBuyer.isNotEmpty) {
+          final double needed = bBill - bPaid;
+          final double rem = bucket['remaining'] as double;
+          if (rem >= needed) {
+            bPaid += needed;
+            bucket['remaining'] = rem - needed;
+            break;
+          } else {
+            bPaid += rem;
+            bucket['remaining'] = 0.0;
+          }
         }
       }
     }
-    setState(() => _overdueBills = overdue);
+
+    if (sPaid < sBill) {
+      for (var bucket in unallocatedSellerBuckets) {
+        if ((bucket['remaining'] as double) <= 0) continue;
+        final p = bucket['entry'] as PaymentEntry;
+        final pSeller = p.seller.trim().toUpperCase();
+        final pBuyer = p.buyer.trim().toUpperCase();
+
+        if (pSeller == sKey && (pBuyer.isEmpty || bKey.isEmpty || pBuyer == bKey) && pBuyer.isNotEmpty) {
+          final double needed = sBill - sPaid;
+          final double rem = bucket['remaining'] as double;
+          if (rem >= needed) {
+            sPaid += needed;
+            bucket['remaining'] = rem - needed;
+            break;
+          } else {
+            sPaid += rem;
+            bucket['remaining'] = 0.0;
+          }
+        }
+      }
+    }
+
+    final double bBal = (bBill - bPaid).clamp(0.0, double.infinity);
+    final double sBal = (sBill - sPaid).clamp(0.0, double.infinity);
+
+    final int daysSinceEntry = today.difference(parseFlexibleDate(t.date)).inDays;
+
+    if (daysSinceEntry > 10 && (bBal > 0 || sBal > 0)) {
+      overdue.add({
+        'truck': t,
+        'buyerBill': bBill,
+        'sellerBill': sBill,
+        'buyerBal': bBal,
+        'sellerBal': sBal,
+      });
+    }
   }
+
+  setState(() => _overdueBills = overdue);
+}
 
   Widget _buildMobileDrawer() {
     return Drawer(
@@ -2180,131 +2415,259 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
     );
   }
 
-  Widget _buildOverdueAlertCard() {
-    if (_overdueBills.isEmpty) return const SizedBox.shrink();
+ Widget _buildOverdueAlertCard() {
+  if (_overdueBills.isEmpty) return const SizedBox.shrink();
+  final displayBills = _overdueBills.take(50).toList();
+  final ScrollController verticalScroll = ScrollController();
+  final ScrollController horizontalScroll = ScrollController();
+  const double rowHeight = 48.0;
+  final double calculatedHeight = (_overdueBills.length > 10 ? 10 : _overdueBills.length) * rowHeight + 46.0;
 
-    final ScrollController verticalScroll = ScrollController();
-    const double rowHeight = 52.0;
-    final double calculatedHeight = (_overdueBills.length > 10 ? 10 : _overdueBills.length) * rowHeight + 48.0;
+  Widget cellHeader(String title, {TextAlign align = TextAlign.left}) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+    child: Text(
+      title,
+      textAlign: align,
+      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)),
+    ),
+  );
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFFECACA)),
+  Widget cellText(String text, {bool isBold = false, Color? color, TextAlign align = TextAlign.left}) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+    child: Text(
+      text,
+      textAlign: align,
+      style: TextStyle(
+        fontSize: 12.5,
+        fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+        color: color ?? const Color(0xFF1E293B),
       ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
-                  SizedBox(width: 8),
-                  Text('Overdue Invoices (10+ Days)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF991B1B))),
-                ],
-              ),
-              Text(
-                '${_overdueBills.length} Due',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF991B1B)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              height: calculatedHeight,
-              decoration: BoxDecoration(border: Border.all(color: const Color(0xFFFCA5A5)), borderRadius: BorderRadius.circular(10), color: Colors.white),
-              child: Scrollbar(
-                controller: verticalScroll,
-                thumbVisibility: true,
-                child: SingleChildScrollView(
+    ),
+  );
+
+  return Container(
+    decoration: BoxDecoration(
+      color: const Color(0xFFFEF2F2),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: const Color(0xFFFECACA)),
+    ),
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Overdue Invoices (10+ Days)',
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Color(0xFF991B1B)),
+                ),
+              ],
+            ),
+            Text(
+              '${_overdueBills.length} Due',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF991B1B)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: double.infinity,
+            height: calculatedHeight,
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+              borderRadius: BorderRadius.circular(10),
+              color: Colors.white,
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Stretches to 100% of card width, but maintains minimum 880px for narrow windows
+                final double tableWidth = constraints.maxWidth < 880 ? 880 : constraints.maxWidth;
+
+                return Scrollbar(
                   controller: verticalScroll,
-                  scrollDirection: Axis.vertical,
+                  thumbVisibility: true,
                   child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      headingRowColor: WidgetStateProperty.all(const Color(0xFFFEE2E8)),
-                      columns: const [
-                        DataColumn(label: Text('DATE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                        DataColumn(label: Text('SELLER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                        DataColumn(label: Text('BUYER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                        DataColumn(label: Text('BILL', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                        DataColumn(label: Text('BALANCE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                        DataColumn(label: Text('ACTION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF991B1B)))),
-                      ],
-                      rows: _overdueBills.map((t) {
-                        final double billAmount = t.buyerBill > 0 ? t.buyerBill : t.supplierBill;
-                        final double balanceAmt = double.tryParse(t.remarks) ?? 0;
-                        return DataRow(cells: [
-                          DataCell(Text(formatDisplayDate(t.date))),
-                          DataCell(Text(t.supplier.isNotEmpty ? t.supplier : '—')),
-                          DataCell(Text(t.buyer.isNotEmpty ? t.buyer : 'Unknown')),
-                          DataCell(Text(money(billAmount), style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFDC2626)))),
-                          DataCell(Text(money(balanceAmt), style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDC2626)))),
-                          DataCell(OutlinedButton(
-                            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), side: const BorderSide(color: Color(0xFF047857))),
-                            onPressed: () => _markBillAsPaid(t),
-                            child: const Text('Pay', style: TextStyle(fontSize: 11, color: Color(0xFF047857), fontWeight: FontWeight.bold)),
-                          )),
-                        ]);
-                      }).toList(),
+                    controller: verticalScroll,
+                    scrollDirection: Axis.vertical,
+                    child: Scrollbar(
+                      controller: horizontalScroll,
+                      thumbVisibility: true,
+                      notificationPredicate: (notif) => notif.depth == 1,
+                      child: SingleChildScrollView(
+                        controller: horizontalScroll,
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: tableWidth,
+                          child: Table(
+                            columnWidths: const {
+                              0: FlexColumnWidth(1.1), // DATE
+                              1: FlexColumnWidth(2.5), // SELLER
+                              2: FlexColumnWidth(2.3), // BUYER
+                              3: FlexColumnWidth(1.2), // BILL
+                              4: FlexColumnWidth(1.3), // BUYER BAL
+                              5: FlexColumnWidth(1.3), // SELLER BAL
+                              6: FlexColumnWidth(0.9), // ACTION
+                            },
+                            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                            border: const TableBorder(
+                              horizontalInside: BorderSide(color: Color(0xFFF1F5F9), width: 1),
+                            ),
+                            children: [
+                              TableRow(
+                                decoration: const BoxDecoration(color: Color(0xFFFEE2E8)),
+                                children: [
+                                  cellHeader('DATE'),
+                                  cellHeader('SELLER'),
+                                  cellHeader('BUYER'),
+                                  cellHeader('BILL'),
+                                  cellHeader('BUYER BAL'),
+                                  cellHeader('SELLER BAL'),
+                                  cellHeader('ACTION', align: TextAlign.center),
+                                ],
+                              ),
+                              ...displayBills.map((item) {
+                                final t = item['truck'];
+                                final double billAmount = (item['buyerBill'] as num?)?.toDouble() ?? 0.0;
+                                final double bBal = (item['buyerBal'] as num?)?.toDouble() ?? 0.0;
+                                final double sBal = (item['sellerBal'] as num?)?.toDouble() ?? 0.0;
+
+                                return TableRow(
+                                  children: [
+                                    cellText(formatDisplayDate(t.date)),
+                                    cellText(t.supplier.isNotEmpty ? t.supplier : '—'),
+                                    cellText(t.buyer.isNotEmpty ? t.buyer : 'Unknown'),
+                                    cellText(money(billAmount), isBold: true, color: const Color(0xFF0F172A)),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      child: bBal > 0
+                                          ? Text(money(bBal), style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDC2626)))
+                                          : const Text('SETTLED', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF047857))),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      child: sBal > 0
+                                          ? Text(money(sBal), style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDC2626)))
+                                          : const Text('SETTLED', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF047857))),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      child: Center(
+                                        child: OutlinedButton(
+                                          style: OutlinedButton.styleFrom(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                            side: const BorderSide(color: Color(0xFF047857)),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          ),
+                                          onPressed: () => _markBillAsPaid(item),
+                                          child: const Text('Pay', style: TextStyle(fontSize: 11, color: Color(0xFF047857), fontWeight: FontWeight.bold)),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
-        ],
-      ),
+        ),
+      ],
+    ),
+  );
+}
+  void _markBillAsPaid(dynamic overdueItem) {
+  final t = overdueItem['truck'];
+  final double bBal = (overdueItem['buyerBal'] as num?)?.toDouble() ?? 0.0;
+  final double sBal = (overdueItem['sellerBal'] as num?)?.toDouble() ?? 0.0;
+
+  if (bBal <= 0 && sBal <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('This bill is already fully settled!')),
     );
+    return;
   }
-   void _markBillAsPaid(dynamic truckEntry) {
-    final double totalBill = truckEntry.buyerBill > 0 ? truckEntry.buyerBill : truckEntry.supplierBill;
-    final double alreadyPaid = _payments
-        .where((p) =>
-            p.buyer.toUpperCase() == truckEntry.buyer.toUpperCase() &&
-            formatDisplayDate(p.date) == formatDisplayDate(truckEntry.date) &&
-            p.state == _selectedState)
-        .fold(0.0, (sum, p) => sum + p.amount + p.settlement);
 
-    final double remainingBalance = totalBill - alreadyPaid;
+  final nowStr = formatDisplayDate(DateTime.now().toIso8601String());
+  final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-    if (remainingBalance <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This bill is already fully settled!')));
-      return;
-    }
-
-    setState(() {
-      _payments.add(
-        PaymentEntry(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+  setState(() {
+    if (bBal > 0 && sBal > 0 && bBal == sBal) {
+      // Both parties have identical pending amounts: single direct entry clears both
+      _payments.add(PaymentEntry(
+        id: '${nowMs}_direct',
+        state: _selectedState,
+        type: "DIRECT SETTLEMENT",
+        seller: t.supplier,
+        buyer: t.buyer,
+        amount: bBal,
+        transportReceived: 0,
+        settlement: 0,
+        mode: "DIRECT",
+        date: nowStr,
+        truckId: t.id,
+      ));
+    } else {
+      // Clear Buyer side if pending without affecting the seller
+      if (bBal > 0) {
+        _payments.add(PaymentEntry(
+          id: '${nowMs}_buyer',
           state: _selectedState,
           type: "RECEIPT FROM BUYER",
-          seller: truckEntry.supplier,
-          buyer: truckEntry.buyer,
-          amount: remainingBalance,
+          seller: t.supplier,
+          buyer: t.buyer,
+          amount: bBal,
           transportReceived: 0,
           settlement: 0,
           mode: "DIRECT",
-          date: formatDisplayDate(truckEntry.date),
-        ),
-      );
-      _calculateOverdueBills(_trucks);
-    });
-
-    _commitToLocalDrive();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFF047857),
-        content: Text('Settled ₹${remainingBalance.toStringAsFixed(0)} for ${truckEntry.buyer}!'),
-      ),
-    );
+          date: nowStr,
+          truckId: t.id,
+        ));
+      }
+      // Clear Seller side if pending without affecting the buyer
+      if (sBal > 0) {
+        _payments.add(PaymentEntry(
+          id: '${nowMs}_seller',
+          state: _selectedState,
+          type: "PAYMENT TO SELLER",
+          seller: t.supplier,
+          buyer: t.buyer,
+          amount: sBal,
+          transportReceived: 0,
+          settlement: 0,
+          mode: "DIRECT",
+          date: nowStr,
+          truckId: t.id,
+        ));
+      }
     }
+
+    _calculateOverdueBills(_trucks);
+  });
+
+  _commitToLocalDrive();
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: const Color(0xFF047857),
+      content: Text(
+        'Cleared ${t.truck.isNotEmpty ? t.truck : "Invoice"}! (Buyer: ${money(bBal)}, Seller: ${money(sBal)})',
+      ),
+    ),
+  );
+}
 
    void _carryForwardFinancialYearBalances(String newYear) {
     final startYear = newYear.split('-')[0];
@@ -2458,55 +2821,138 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
   }
 
   void _editFromReport(dynamic t) {
-    _tRemarksCtrl.text = t.remarks;
-    if (t.isInvoice) {
-      // ... existing invoice edit code ...
-    } else {
-      setState(() {
-        _selectedTab = 'trucks';
-        _editingTruckId = t.id;
-        _editingInvoiceId = null;
-        // Auto-expand if buyer bill is different from supplier bill
-        _hasCustomBuyerBill = (t.buyerBill > 0 && t.buyerBill != t.supplierBill);
-        _tTruckCtrl.text = t.truck == '—' ? '' : t.truck;
-        _tDateCtrl.text = t.date;
-        _tSupplier = t.supplier == '—' ? '' : t.supplier;
-        _tBuyer = t.buyer;
-        _tTransporter = t.transporter == '—' ? '' : t.transporter;
-        _tCoconutType = t.type;
-        _tQtyCtrl.text = t.qty > 0 ? t.qty.toStringAsFixed(0) : '';
-        _tSBillCtrl.text = t.supplierBill > 0 ? t.supplierBill.toStringAsFixed(0) : '';
-        _tBBillCtrl.text = t.buyerBill > 0 ? t.buyerBill.toStringAsFixed(0) : '';
-        _tCommCtrl.text = t.commission > 0 ? t.commission.toStringAsFixed(0) : '500';
-        _tExpCtrl.text = t.transportExp > 0 ? t.transportExp.toStringAsFixed(0) : '0';
-        _tFreightCtrl.text = t.freight > 0 ? t.freight.toStringAsFixed(0) : '0';
-        _tAdvCtrl.text = t.advance > 0 ? t.advance.toStringAsFixed(0) : '0';
-      });
-    }
+  _tRemarksCtrl.text = t.remarks;
+  if (t.isInvoice) {
+    setState(() {
+      _selectedTab = 'invoice';
+      _editingInvoiceId = t.id;
+      _editingTruckId = null;
+      _iNoCtrl.text = t.invoiceNo.isNotEmpty ? t.invoiceNo : "INV-00001";
+      _iDateCtrl.text = t.date;
+      _iBuyer = t.buyer;
+      _iSeller = t.supplier == '—' ? '' : t.supplier;
+      _iTransporter = t.transporter == '—' ? '' : t.transporter;
+      _iLorryCtrl.text = t.truck == '—' ? '' : t.truck;
+      _iSellerAmountCtrl.text = t.supplierBill > 0 ? t.supplierBill.toStringAsFixed(0) : '';
+      _iTransportExpCtrl.text = t.transportExp > 0 ? t.transportExp.toStringAsFixed(0) : '';
+      _iFreightCtrl.text = t.freight > 0 ? t.freight.toStringAsFixed(0) : '';
+      _iAdvCtrl.text = t.advance > 0 ? t.advance.toStringAsFixed(0) : '';
+      _iCommCtrl.text = t.commission > 0 ? t.commission.toStringAsFixed(0) : '';
+      _iBagsCtrl.text = t.bags > 0 ? t.bags.toStringAsFixed(0) : '0';
+      _iBagRateCtrl.text = t.bagRate > 0 ? t.bagRate.toStringAsFixed(0) : '0';
+      _iLoadRateCtrl.text = t.loadRate > 0 ? t.loadRate.toStringAsFixed(0) : '0';
+      _iInsCtrl.text = t.insurance > 0 ? t.insurance.toStringAsFixed(0) : '0';
+      _iAmcCtrl.text = t.amc > 0 ? t.amc.toStringAsFixed(0) : '0';
+      _iLoadingManual = t.isLoadManual;
+      _iLoadManualAmountCtrl.text = t.loadManualAmt > 0 ? t.loadManualAmt.toStringAsFixed(0) : '0';
+      _iLoadingManual = t.isLoadManual;
+      _iLoadManualAmountCtrl.text = t.loadManualAmt > 0 ? t.loadManualAmt.toStringAsFixed(0) : '0';
+
+      final matchedBuyer = _parties.firstWhere(
+        (p) => p.name.toUpperCase() == t.buyer.toUpperCase(),
+        orElse: () => Party(name: "", type: "", phone: "", address: ""),
+      );
+      _iAddressCtrl.text = matchedBuyer.address;
+      _iPhoneCtrl.text = matchedBuyer.phone;
+
+      for (var it in _invoiceGoods) { it.dispose(); }
+      _invoiceGoods.clear();
+      _addGoodsRow(
+        desc: t.type.isNotEmpty ? t.type : "COCONUT",
+        qty: t.qty > 0 ? t.qty.toStringAsFixed(0) : '',
+        rate: t.rate > 0 ? t.rate.toStringAsFixed(0) : '',
+      );
+    });
+  } else {
+    setState(() {
+      _selectedTab = 'trucks';
+      _editingTruckId = t.id;
+      _editingInvoiceId = null;
+      _hasCustomBuyerBill = (t.buyerBill > 0 && t.buyerBill != t.supplierBill);
+      _tTruckCtrl.text = t.truck == '—' ? '' : t.truck;
+      _tDateCtrl.text = t.date;
+      _tSupplier = t.supplier == '—' ? '' : t.supplier;
+      _tBuyer = t.buyer;
+      _tTransporter = t.transporter == '—' ? '' : t.transporter;
+      _tCoconutType = t.type;
+      _tQtyCtrl.text = t.qty > 0 ? t.qty.toStringAsFixed(0) : '';
+      _tSBillCtrl.text = t.supplierBill > 0 ? t.supplierBill.toStringAsFixed(0) : '';
+      _tBBillCtrl.text = t.buyerBill > 0 ? t.buyerBill.toStringAsFixed(0) : '';
+      _tCommCtrl.text = t.commission > 0 ? t.commission.toStringAsFixed(0) : '500';
+      _tExpCtrl.text = t.transportExp > 0 ? t.transportExp.toStringAsFixed(0) : '0';
+      _tFreightCtrl.text = t.freight > 0 ? t.freight.toStringAsFixed(0) : '0';
+      _tAdvCtrl.text = t.advance > 0 ? t.advance.toStringAsFixed(0) : '0';
+    });
   }
+}
 
   void _editPaymentEntryDialog(dynamic p) {
-    final amtCtrl = TextEditingController(text: p.amount.toStringAsFixed(0));
-    final discCtrl = TextEditingController(text: p.settlement.toStringAsFixed(0));
-    final dateCtrl = TextEditingController(text: p.date);
-    String mode = p.mode;
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDlgState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Edit Payment (${p.type})', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-          content: SingleChildScrollView(
+  final amtCtrl = TextEditingController(text: p.amount.toStringAsFixed(0));
+  final discCtrl = TextEditingController(text: p.settlement.toStringAsFixed(0));
+  final commAdjCtrl = TextEditingController(text: (p.commissionAdjusted as num?)?.toStringAsFixed(0) ?? '0');
+  final dateCtrl = TextEditingController(text: p.date);
+  String mode = p.mode;
+  String selectedSeller = p.seller;
+  String selectedBuyer = p.buyer;
+
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (context, setDlgState) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.edit_note_rounded, color: Color(0xFF047857)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Edit Payment (${p.type})',
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _customField('Amount', amtCtrl, isNum: true),
+                // 1. Reassign Seller / Supplier
+                _customAutocomplete(
+                  'Seller / Supplier',
+                  _sellerNames,
+                  selectedSeller,
+                  'SELECT SELLER',
+                  (val) => setDlgState(() => selectedSeller = val),
+                ),
                 const SizedBox(height: 10),
-                _customField('Discount / Settlement', discCtrl, isNum: true),
+
+                // 2. Reassign Buyer
+                _customAutocomplete(
+                  'Buyer',
+                  _buyerNames,
+                  selectedBuyer,
+                  'SELECT BUYER',
+                  (val) => setDlgState(() => selectedBuyer = val),
+                ),
                 const SizedBox(height: 10),
+
+                // 3. Payment amounts
+                _customField('Amount (₹)', amtCtrl, isNum: true),
+                const SizedBox(height: 10),
+                _customField('Discount / Settlement (₹)', discCtrl, isNum: true),
+                const SizedBox(height: 10),
+                _customField('Commission Adjusted (₹)', commAdjCtrl, isNum: true),
+                const SizedBox(height: 10),
+
+                // 4. Payment Mode
                 DropdownButtonFormField<String>(
-                  value: mode,
-                  items: ["DIRECT", "CASH", "ICICI BANK", "KOTAK BANK", "STATE BANK OF INDIA"].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                  value: ["DIRECT", "CASH", "ICICI BANK", "KOTAK BANK", "STATE BANK OF INDIA"].contains(mode) ? mode : "DIRECT",
+                  items: ["DIRECT", "CASH", "ICICI BANK", "KOTAK BANK", "STATE BANK OF INDIA"]
+                      .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                      .toList(),
                   onChanged: (val) => setDlgState(() => mode = val!),
                   decoration: InputDecoration(
                     labelText: 'Payment Mode',
@@ -2516,30 +2962,60 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                   ),
                 ),
                 const SizedBox(height: 10),
+
+                // 5. Date
                 _customField('Date', dateCtrl, readOnly: true, icon: Icons.calendar_today_outlined, onTap: () => _selectDateForController(dateCtrl)),
               ],
             ),
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B)))),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-              onPressed: () {
-                setState(() {
-                  p.amount = double.tryParse(amtCtrl.text) ?? p.amount;
-                  p.settlement = double.tryParse(discCtrl.text) ?? p.settlement;
-                  p.mode = mode; p.date = dateCtrl.text.trim();
-                });
-                _commitToLocalDrive();
-                Navigator.pop(ctx);
-              },
-              child: const Text('Save Changes'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B))),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF047857),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              final sClean = selectedSeller.trim().toUpperCase();
+              final bClean = selectedBuyer.trim().toUpperCase();
+
+              setState(() {
+                // If party was changed to fix a mistake, unlink truckId so it moves cleanly to the new party as advance/on-account
+                if (sClean != p.seller.trim().toUpperCase() || bClean != p.buyer.trim().toUpperCase()) {
+                  p.truckId = '';
+                }
+                p.seller = sClean;
+                p.buyer = bClean;
+                p.amount = double.tryParse(amtCtrl.text) ?? p.amount;
+                p.settlement = double.tryParse(discCtrl.text) ?? p.settlement;
+                p.commissionAdjusted = double.tryParse(commAdjCtrl.text) ?? p.commissionAdjusted;
+                p.mode = mode;
+                p.date = dateCtrl.text.trim();
+
+                _calculateOverdueBills(_trucks);
+              });
+
+              _commitToLocalDrive();
+              Navigator.pop(ctx);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  backgroundColor: Color(0xFF047857),
+                  content: Text('Payment entry updated and reassigned successfully!'),
+                ),
+              );
+            },
+            child: const Text('Save Changes'),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Future<bool> _confirmDelete(BuildContext context, String itemTitle) async {
     return await showDialog<bool>(
@@ -2871,7 +3347,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
  // ---------------- 2. TRUCK LOGISTICS VIEW (With Native Horizontal Scroll) ----------------
   Widget _buildTruckLogisticsView() {
     final query = _tSearchCtrl.text.trim().toLowerCase();
-    final filtered = _trucks.where((t) {
+    final filtered = _trucks.reversed.where((t) {
       return t.state == _selectedState &&
           (query.isEmpty ||
               t.truck.toLowerCase().contains(query) ||
@@ -2883,7 +3359,6 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
 
     // Dedicated controller to ensure a visible horizontal scrollbar
     final ScrollController horizontalScroll = ScrollController();
-
     return Column(
       children: [
         Container(
@@ -3011,7 +3486,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                   }
                                 });
                               },
-                              child: const Text('+ Different Buyer Bill', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
+                              child: const Text('+ Buyer Bill', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
                             ),
                           ],
                         ),
@@ -3126,6 +3601,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                           commission: double.tryParse(_tCommCtrl.text) ?? 500, transportExp: double.tryParse(_tExpCtrl.text) ?? 0,
                           freight: double.tryParse(_tFreightCtrl.text) ?? 0, advance: double.tryParse(_tAdvCtrl.text) ?? 0,
                           isInvoice: false, remarks: _tRemarksCtrl.text.trim().toUpperCase(),
+                          invoiceNo: _iNoCtrl.text.trim(),
                         );
                         _clearTruckForm();
                       });
@@ -3143,6 +3619,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                         commission: double.tryParse(_tCommCtrl.text) ?? 500, transportExp: double.tryParse(_tExpCtrl.text) ?? 0,
                         freight: double.tryParse(_tFreightCtrl.text) ?? 0, advance: double.tryParse(_tAdvCtrl.text) ?? 0,
                         isInvoice: false, remarks: _tRemarksCtrl.text.trim().toUpperCase(),
+                        invoiceNo: _iNoCtrl.text.trim(),
                       ));
                       _clearTruckForm();
                     });
@@ -3221,7 +3698,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                 DataColumn(label: Text('ACTIONS', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF64748B)))),
                               ],
                               rows: filtered.map((t) => DataRow(cells: [
-                                DataCell(Text(t.date)),
+                                DataCell(Text(formatDisplayDate(t.date))),
                                 DataCell(Text(t.isInvoice ? 'INV: ${t.truck}' : t.truck, style: TextStyle(fontWeight: FontWeight.bold, color: t.isInvoice ? const Color(0xFF047857) : Colors.black))),
                                 DataCell(Text(t.supplier)),
                                 DataCell(Text(t.buyer)),
@@ -3566,8 +4043,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
         freight: _invFreight, advance: _invAdvance, isInvoice: true,
         rate: _invoiceGoods.isNotEmpty ? _invoiceGoods.first.rate : 0, bags: double.tryParse(_iBagsCtrl.text) ?? 0, bagRate: double.tryParse(_iBagRateCtrl.text) ?? 0, loadRate: double.tryParse(_iLoadRateCtrl.text) ?? 0, insurance: double.tryParse(_iInsCtrl.text) ?? 0, amc: double.tryParse(_iAmcCtrl.text) ?? 0, isLoadManual: _iLoadingManual, loadManualAmt: double.tryParse(_iLoadManualAmountCtrl.text) ?? 0,
       ));
-      int currentNum = int.tryParse(_iNoCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
-      _iNoCtrl.text = "INV-${(currentNum + 1).toString().padLeft(5, '0')}";
+      _updateNextInvoiceNumber();
       _clearInvoiceForm();
     });
     _commitToLocalDrive();
@@ -3909,6 +4385,166 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                 const SizedBox(width: 12),
                 Expanded(child: _customAutocomplete('Buyer', _buyerNames, _payBuyer, 'SELECT BUYER', (val) => setState(() => _payBuyer = val))),
               ]),
+              // Insert right after the first _responsiveRow([Transaction Type, Seller, Buyer]):
+const SizedBox(height: 12),
+
+
+// DYNAMIC BILL SELECTOR BOX (SHOWS PARTY NAME & LIVE DUE CALCULATION)
+Builder(
+  builder: (context) {
+    final bool isSeller = _payType.contains("SELLER");
+
+    // 1. Calculate live amount using your exact controller variable names
+    final double liveEnteredAmount = double.tryParse(_payAmountCtrl.text.trim()) ?? 0.0;
+    final double liveDiscount = double.tryParse(_paySettlementCtrl.text.trim()) ?? 0.0;
+    final double liveCommAdj = double.tryParse(_payCommAdjustedCtrl.text.trim()) ?? 0.0;
+    final double totalPayingNow = liveEnteredAmount + liveDiscount + liveCommAdj;
+
+    // 2. Filter trucks for the selected state and party
+    final candidateTrucks = _trucks.where((t) {
+      final matchState = t.state == _selectedState;
+      final matchSeller = _paySeller.isEmpty || t.supplier.toUpperCase() == _paySeller.toUpperCase();
+      final matchBuyer = _payBuyer.isEmpty || t.buyer.toUpperCase() == _payBuyer.toUpperCase();
+      return matchState && matchSeller && matchBuyer;
+    }).toList();
+
+    candidateTrucks.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
+
+    // 3. Tally prior payments
+    Map<String, double> directPaid = {};
+    double unallocatedPool = 0.0;
+
+    for (var p in _payments.where((p) => p.state == _selectedState)) {
+      final bool matchesType = isSeller
+          ? (p.type.contains("SELLER") || p.mode == "DIRECT")
+          : (p.type.contains("BUYER") || p.mode == "DIRECT");
+      if (!matchesType) continue;
+
+      final bool sellerMatch = _paySeller.isEmpty || p.seller.toUpperCase() == _paySeller.toUpperCase();
+      final bool buyerMatch = _payBuyer.isEmpty || p.buyer.toUpperCase() == _payBuyer.toUpperCase();
+      if (!sellerMatch || !buyerMatch) continue;
+
+      final double totalPay = ((p.amount ?? 0) as num).toDouble() +
+          ((p.settlement ?? 0) as num).toDouble() +
+          ((p.commissionAdjusted ?? 0) as num).toDouble();
+
+      if (p.truckId.isNotEmpty) {
+        directPaid[p.truckId] = (directPaid[p.truckId] ?? 0.0) + totalPay;
+      } else {
+        unallocatedPool += totalPay;
+      }
+    }
+
+    // 4. Compute outstanding balance per bill
+    List<Map<String, dynamic>> pendingTrucks = [];
+    for (var t in candidateTrucks) {
+      final double billAmt = isSeller
+          ? t.supplierBill
+          : (t.buyerBill > 0 ? t.buyerBill : t.supplierBill);
+      if (billAmt <= 0) continue;
+
+      double linked = directPaid[t.id] ?? 0.0;
+      double remaining = billAmt - linked;
+
+      double fifoUsed = 0.0;
+      if (remaining > 0 && unallocatedPool > 0) {
+        if (unallocatedPool >= remaining) {
+          fifoUsed = remaining;
+          unallocatedPool -= remaining;
+        } else {
+          fifoUsed = unallocatedPool;
+          unallocatedPool = 0.0;
+        }
+      }
+
+      double finalPending = (remaining - fifoUsed).clamp(0.0, double.infinity);
+
+      // Keep if outstanding or currently selected
+      if (finalPending > 0.5 || t.id == _paySelectedTruckId) {
+        pendingTrucks.add({
+          'truck': t,
+          'bill': billAmt,
+          'pending': finalPending,
+        });
+      }
+    }
+
+    pendingTrucks.sort((a, b) => parseFlexibleDate((b['truck'] as dynamic).date)
+        .compareTo(parseFlexibleDate((a['truck'] as dynamic).date)));
+
+    final bool hasSelection = pendingTrucks.any((m) => (m['truck'] as dynamic).id == _paySelectedTruckId);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.receipt_long_outlined, size: 18, color: Color(0xFF047857)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: hasSelection ? _paySelectedTruckId : "",
+                isExpanded: true,
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                items: [
+                  const DropdownMenuItem(
+                    value: "",
+                    child: Text('AUTO-ALLOCATE / ON ACCOUNT (FIFO)', style: TextStyle(color: Color(0xFF64748B))),
+                  ),
+                  ...pendingTrucks.map((item) {
+                    final t = item['truck'];
+                    final double dueAmt = item['pending'];
+                    final double totalAmt = item['bill'];
+
+                    // 1. Display Seller if Payment to Seller; Buyer if Receipt from Buyer
+                    final String partyName = isSeller
+                        ? (t.supplier.isNotEmpty ? t.supplier : 'SELLER')
+                        : (t.buyer.isNotEmpty ? t.buyer : 'BUYER');
+
+                    // 2. Real-time deduction: subtract entered payment dynamically
+                    final bool isThisSelected = t.id == _paySelectedTruckId;
+                    final double liveDue = isThisSelected
+                        ? (dueAmt - totalPayingNow).clamp(0.0, double.infinity)
+                        : dueAmt;
+
+                    return DropdownMenuItem<String>(
+                      value: t.id,
+                      child: Text(
+                        '${formatDisplayDate(t.date)}  •  $partyName  •  Due: ${money(liveDue)}  (Bill: ${money(totalAmt)})',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }),
+                ],
+                onChanged: (val) {
+  setState(() {
+    _paySelectedTruckId = val ?? "";
+    if (_paySelectedTruckId.isNotEmpty) {
+      final selected = pendingTrucks.firstWhere((m) => (m['truck'] as dynamic).id == _paySelectedTruckId);
+      final double due = (selected['pending'] as num).toDouble();
+      _payAmountCtrl.text = due.toStringAsFixed(0); // Auto-fills the remaining balance
+    }
+  });
+},
+              ),
+            ),
+          ),
+          if (_paySelectedTruckId.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.clear, size: 16, color: Colors.red),
+              tooltip: 'Clear Bill Selection',
+              onPressed: () => setState(() => _paySelectedTruckId = ""),
+            ),
+        ],
+      ),
+    );
+  },
+),
               const SizedBox(height: 12),
               _responsiveRow([
                 Expanded(child: _customField(_payType.contains("SELLER") ? 'Amount Paid' : 'Amount Received', _payAmountCtrl, hint: '₹ AMOUNT', isNum: true)),
@@ -3963,13 +4599,22 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                         }
 
                         setState(() {
-                          _payments.add(PaymentEntry(
-                            id: DateTime.now().millisecondsSinceEpoch.toString(),
-                            state: _selectedState, type: _payType,
-                            seller: _paySeller.toUpperCase().trim(), buyer: _payBuyer.toUpperCase().trim(),
-                            amount: amt, transportReceived: double.tryParse(_payTransportReceivedCtrl.text) ?? 0,
-                            settlement: disc, commissionAdjusted: commAdj, mode: _payMode, date: _payDateCtrl.text.trim(),
-                          ));
+                          // Update the PaymentEntry creation inside Record Transaction:
+_payments.add(PaymentEntry(
+  id: DateTime.now().millisecondsSinceEpoch.toString(),
+  state: _selectedState,
+  type: _payType,
+  seller: _paySeller.toUpperCase().trim(),
+  buyer: _payBuyer.toUpperCase().trim(),
+  amount: amt,
+  transportReceived: double.tryParse(_payTransportReceivedCtrl.text) ?? 0,
+  settlement: disc,
+  commissionAdjusted: commAdj,
+  mode: _payMode,
+  date: _payDateCtrl.text.trim(),
+  truckId: _paySelectedTruckId, // <--- Links to chosen bill
+));
+_paySelectedTruckId = ""; // Reset after saving
                           _payAmountCtrl.clear();
                           _payTransportReceivedCtrl.text = "0";
                           _paySettlementCtrl.text = "0";
@@ -4054,7 +4699,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                             rows: payList.map((p) {
                               final bool isSeller = p.type.contains("SELLER");
                               return DataRow(cells: [
-                                DataCell(Text(p.date)),
+                                DataCell(Text(formatDisplayDate(p.date))),
                                 DataCell(Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
@@ -4074,6 +4719,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                     IconButton(icon: const Icon(Icons.edit, color: Color(0xFF047857), size: 18), onPressed: () => _editPaymentEntryDialog(p)),
                                     IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18), onPressed: () {
                                       setState(() => _payments.remove(p));
+                                      _calculateOverdueBills(_trucks);
                                       _commitToLocalDrive();
                                     }),
                                   ],
@@ -4094,8 +4740,25 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
     );
   }
 
-  
-  // ---------------- 5. REPORTS VIEW ----------------
+  String _formatPaymentSummary(PaymentEntry p) {
+  final dateStr = formatDisplayDate(p.date);
+
+  // Pure settlement (e.g. ₹6 discount/round-off, 0 paid)
+  if (p.amount == 0 && p.settlement > 0) {
+    return '${money(p.settlement)} (SETTLEMENT on $dateStr)';
+  }
+  // Pure commission adjustment
+  if (p.amount == 0 && p.commissionAdjusted > 0) {
+    return '${money(p.commissionAdjusted)} (COMM ADJ on $dateStr)';
+  }
+  // Combined amount paid + settlement discount
+  if (p.amount > 0 && p.settlement > 0) {
+    return '${money(p.amount)} (${p.mode}) + ${money(p.settlement)} (SETTLEMENT) on $dateStr';
+  }
+  // Standard payment
+  return '${money(p.amount)} (${p.mode} on $dateStr)';
+}
+ // ---------------- 5. REPORTS VIEW ----------------
   Widget _buildReportsView() {
     final fyStart = _getFYStartDate(_selectedFinancialYear);
 
@@ -4109,14 +4772,26 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
       child: Text(text, style: TextStyle(fontSize: 12.5, fontWeight: isBold ? FontWeight.bold : FontWeight.w500, color: color ?? const Color(0xFF1E293B))),
     );
 
+    // ==================== SELLER STATEMENT ====================
     double sellerOpeningDue = 0;
+    final DateTime sellerCutoffDate = _repSellerFromCtrl.text.trim().isNotEmpty
+        ? parseFlexibleDate(_repSellerFromCtrl.text.trim())
+        : fyStart;
+
     if (_repSeller.isNotEmpty) {
       final priorBilled = _trucks
-          .where((t) => t.state == _selectedState && t.supplier.toUpperCase() == _repSeller.toUpperCase() && parseFlexibleDate(t.date).isBefore(fyStart))
+          .where((t) =>
+              t.state == _selectedState &&
+              t.supplier.toUpperCase() == _repSeller.toUpperCase() &&
+              parseFlexibleDate(t.date).isBefore(sellerCutoffDate))
           .fold(0.0, (s, t) => s + t.supplierBill);
       final priorPaid = _payments
-          .where((p) => p.state == _selectedState && p.seller.toUpperCase() == _repSeller.toUpperCase() && parseFlexibleDate(p.date).isBefore(fyStart))
-          .fold(0.0, (s, p) => s + p.amount + p.settlement);
+          .where((p) =>
+              p.state == _selectedState &&
+              (p.type.contains("SELLER") || p.mode == "DIRECT") &&
+              p.seller.toUpperCase() == _repSeller.toUpperCase() &&
+              parseFlexibleDate(p.date).isBefore(sellerCutoffDate))
+          .fold(0.0, (s, p) => s + p.amount + p.settlement + p.commissionAdjusted);
       sellerOpeningDue = priorBilled - priorPaid;
     }
 
@@ -4124,26 +4799,92 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
       return t.state == _selectedState &&
           (_repSeller.isEmpty || t.supplier.toUpperCase() == _repSeller.toUpperCase()) &&
           (_repSellerBuyerFilter.isEmpty || t.buyer.toUpperCase() == _repSellerBuyerFilter.toUpperCase()) &&
-          _isDateInFY(t.date, _selectedFinancialYear) &&
-          isDateInRange(t.date, _repSellerFromCtrl.text, _repSellerToCtrl.text);
+          _isDateInFY(t.date, _selectedFinancialYear);
     }).toList();
     sellerTrucks.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
 
     final sellerPayments = _payments.where((p) {
+      final bool isSellerMatch = p.type.contains("SELLER") || (p.mode == "DIRECT" && !p.id.endsWith("_buyer"));
       return p.state == _selectedState &&
-          (p.type.contains("SELLER") || p.mode == "DIRECT") &&
+          isSellerMatch &&
           (_repSeller.isEmpty || p.seller.toUpperCase() == _repSeller.toUpperCase()) &&
           (_repSellerBuyerFilter.isEmpty || p.buyer.toUpperCase() == _repSellerBuyerFilter.toUpperCase()) &&
           _isDateInFY(p.date, _selectedFinancialYear);
     }).toList();
     sellerPayments.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
 
-    final double sTotalQty = sellerTrucks.fold<double>(0.0, (sum, t) => sum + t.qty);
-    final double sTotalComm = sellerTrucks.fold<double>(0.0, (sum, t) => sum + t.commission);
-    final double sTotalBilled = sellerTrucks.fold<double>(0.0, (sum, t) => sum + t.supplierBill) + (sellerOpeningDue > 0 ? sellerOpeningDue : 0.0);
-    final double sTotalPaid = sellerPayments.fold<double>(0.0, (sum, p) => sum + p.amount);
-    final double sDiscount = sellerPayments.fold<double>(0.0, (sum, p) => sum + p.settlement);
-    final double sCommissionAdjusted = sellerPayments.fold<double>(0.0, (sum, p) => sum + p.commissionAdjusted);
+    final List<Map<String, dynamic>> rawSellerReportRows = [];
+    Map<String, List<PaymentEntry>> truckLinkedSellerPayments = {};
+    List<PaymentEntry> unallocatedSellerPayments = [];
+
+    for (var p in sellerPayments) {
+      if (p.truckId.isNotEmpty) {
+        truckLinkedSellerPayments.putIfAbsent(p.truckId, () => []).add(p);
+      } else {
+        unallocatedSellerPayments.add(p);
+      }
+    }
+
+    for (int i = 0; i < sellerTrucks.length; i++) {
+      final t = sellerTrucks[i];
+      List<dynamic> matchedPayments = List.from(truckLinkedSellerPayments[t.id] ?? []);
+      double currentPaidOnRow = matchedPayments.fold<double>(0.0, (s, p) => s + p.amount + p.settlement + p.commissionAdjusted);
+
+      if (currentPaidOnRow < t.supplierBill) {
+        for (int pIdx = 0; pIdx < unallocatedSellerPayments.length; pIdx++) {
+          final p = unallocatedSellerPayments[pIdx];
+          final bool sellerMatch = p.seller.toUpperCase() == t.supplier.toUpperCase();
+          final bool buyerMatch = p.buyer.isNotEmpty && t.buyer.isNotEmpty && p.buyer.toUpperCase() == t.buyer.toUpperCase();
+
+          if (sellerMatch && buyerMatch) {
+            matchedPayments.add(p);
+            currentPaidOnRow += p.amount + p.settlement + p.commissionAdjusted;
+            unallocatedSellerPayments.removeAt(pIdx);
+            pIdx--;
+            if (currentPaidOnRow >= t.supplierBill && i < sellerTrucks.length - 1) break;
+          }
+        }
+      }
+
+      double paidSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.amount);
+      double discSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.settlement);
+      double commAdjSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.commissionAdjusted);
+      double rowBalance = t.supplierBill - paidSum - discSum - commAdjSum;
+
+      rawSellerReportRows.add({
+        'truck': t,
+        'payments': matchedPayments,
+        'date': formatDisplayDate(t.date),
+        'buyer': t.buyer,
+        'qty': numFmt(t.qty),
+        'commission': money(t.commission),
+        'sellerBill': money(t.supplierBill),
+        'balance': money(rowBalance),
+      });
+    }
+
+    final sellerReportRows = rawSellerReportRows.where((row) {
+      final t = row['truck'] as TruckEntry;
+      final pList = row['payments'] as List<dynamic>;
+      if (_repSellerFromCtrl.text.trim().isEmpty && _repSellerToCtrl.text.trim().isEmpty) return true;
+      bool matches = isDateInRange(t.date, _repSellerFromCtrl.text, _repSellerToCtrl.text);
+      if (!matches) {
+        for (var p in pList) {
+          if (isDateInRange(p.date, _repSellerFromCtrl.text, _repSellerToCtrl.text)) {
+            matches = true;
+            break;
+          }
+        }
+      }
+      return matches;
+    }).toList();
+
+    final double sTotalQty = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['truck'] as TruckEntry).qty);
+    final double sTotalComm = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['truck'] as TruckEntry).commission);
+    final double sTotalBilled = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['truck'] as TruckEntry).supplierBill) + (sellerOpeningDue > 0 ? sellerOpeningDue : 0.0);
+    final double sTotalPaid = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.amount));
+    final double sDiscount = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.settlement));
+    final double sCommissionAdjusted = sellerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.commissionAdjusted));
     final double sBalanceDue = sTotalBilled - sTotalPaid - sDiscount - sCommissionAdjusted;
 
     final double sCommRate = double.tryParse(_repSellerCommRateCtrl.text) ?? 0;
@@ -4152,69 +4893,27 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
         : 0;
     final double sCombinedTotalCommission = sCalculatedQtyComm + sTotalComm;
 
-    List<Map<String, dynamic>> sellerReportRows = [];
-    List<PaymentEntry> unallocatedSellerPayments = List.from(sellerPayments);
 
-    if (sellerOpeningDue > 0) {
-      sellerReportRows.add({
-        'truck': TruckEntry(id: 'VIRTUAL_OB', state: _selectedState, date: '01-04-${(fyStart.year % 100).toString().padLeft(2, '0')}', truck: 'B/F', supplier: _repSeller, buyer: 'PREVIOUS YEAR DUE', transporter: '—', type: 'OPENING BAL', qty: 0, supplierBill: sellerOpeningDue, buyerBill: 0, commission: 0, transportExp: 0, freight: 0, advance: 0),
-        'payments': <dynamic>[],
-        'date': '01-04-${(fyStart.year % 100).toString().padLeft(2, '0')}',
-        'buyer': 'OPENING BALANCE (B/F)',
-        'qty': '0', 'commission': '₹0', 'sellerBill': money(sellerOpeningDue), 'balance': money(sellerOpeningDue),
-      });
-    }
-
-    for (int i = 0; i < sellerTrucks.length; i++) {
-      final t = sellerTrucks[i];
-      List<dynamic> matchedPayments = [];
-      double currentPaidOnRow = 0.0;
-      for (int pIdx = 0; pIdx < unallocatedSellerPayments.length; pIdx++) {
-        final p = unallocatedSellerPayments[pIdx];
-        final bool sellerMatch = p.seller.toUpperCase() == t.supplier.toUpperCase();
-        final bool buyerMatch = p.buyer.isEmpty || t.buyer.isEmpty || p.buyer.toUpperCase() == t.buyer.toUpperCase();
-        if (sellerMatch && buyerMatch) {
-          matchedPayments.add(p);
-          currentPaidOnRow += p.amount + p.settlement + p.commissionAdjusted;
-          unallocatedSellerPayments.removeAt(pIdx);
-          pIdx--;
-          if (currentPaidOnRow >= t.supplierBill && i < sellerTrucks.length - 1) break;
-        }
-      }
-      double paidSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.amount);
-      double discSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.settlement);
-      double commAdjSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.commissionAdjusted);
-      double rowBalance = t.supplierBill - paidSum - discSum - commAdjSum;
-
-      sellerReportRows.add({
-        'truck': t, 'payments': matchedPayments, 'date': formatDisplayDate(t.date),
-        'buyer': t.buyer, 'qty': numFmt(t.qty), 'commission': money(t.commission),
-        'sellerBill': money(t.supplierBill), 'balance': money(rowBalance),
-      });
-    }
-
-    for (var p in unallocatedSellerPayments) {
-      sellerReportRows.add({
-        'truck': TruckEntry(id: 'EXTRA_PAY', state: _selectedState, date: p.date, truck: 'PAYMENT', supplier: p.seller, buyer: p.buyer, transporter: '—', type: 'PAYMENT', qty: 0, supplierBill: 0, buyerBill: 0, commission: 0, transportExp: 0, freight: 0, advance: 0),
-        'payments': [p],
-        'date': formatDisplayDate(p.date),
-        'buyer': p.buyer.isNotEmpty ? p.buyer : 'ON ACCOUNT PAYMENT',
-        'qty': '—',
-        'commission': '₹0',
-        'sellerBill': '₹0',
-        'balance': money(-(p.amount + p.settlement + p.commissionAdjusted)),
-      });
-    }
-
-    // 2. Buyer Calculations
+    // ==================== BUYER STATEMENT ====================
     double buyerOpeningDue = 0;
+    final DateTime buyerCutoffDate = _repBuyerFromCtrl.text.trim().isNotEmpty
+        ? parseFlexibleDate(_repBuyerFromCtrl.text.trim())
+        : fyStart;
+
     if (_repBuyer.isNotEmpty) {
       final priorBilled = _trucks
-          .where((t) => t.state == _selectedState && t.buyer.toUpperCase() == _repBuyer.toUpperCase() && parseFlexibleDate(t.date).isBefore(fyStart))
+          .where((t) =>
+              t.state == _selectedState &&
+              t.buyer.toUpperCase() == _repBuyer.toUpperCase() &&
+              parseFlexibleDate(t.date).isBefore(buyerCutoffDate))
           .fold(0.0, (s, t) => s + (t.buyerBill > 0 ? t.buyerBill : t.supplierBill));
       final priorPaid = _payments
-          .where((p) => p.state == _selectedState && p.buyer.toUpperCase() == _repBuyer.toUpperCase() && parseFlexibleDate(p.date).isBefore(fyStart))
-          .fold(0.0, (sum, p) => sum + p.amount + p.settlement);
+          .where((p) =>
+              p.state == _selectedState &&
+              (p.type.contains("BUYER") || p.mode == "DIRECT") &&
+              p.buyer.toUpperCase() == _repBuyer.toUpperCase() &&
+              parseFlexibleDate(p.date).isBefore(buyerCutoffDate))
+          .fold(0.0, (sum, p) => sum + p.amount + p.settlement + p.commissionAdjusted);
       buyerOpeningDue = priorBilled - priorPaid;
     }
 
@@ -4222,82 +4921,95 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
       return t.state == _selectedState &&
           (_repBuyer.isEmpty || t.buyer.toUpperCase() == _repBuyer.toUpperCase()) &&
           (_repBuyerSellerFilter.isEmpty || t.supplier.toUpperCase() == _repBuyerSellerFilter.toUpperCase()) &&
-          _isDateInFY(t.date, _selectedFinancialYear) &&
-          isDateInRange(t.date, _repBuyerFromCtrl.text, _repBuyerToCtrl.text);
+          _isDateInFY(t.date, _selectedFinancialYear);
     }).toList();
     buyerTrucks.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
 
     final buyerPayments = _payments.where((p) {
+      final bool isBuyerMatch = p.type.contains("BUYER") || (p.mode == "DIRECT" && !p.id.endsWith("_seller"));
       return p.state == _selectedState &&
-          (p.type.contains("BUYER") || p.mode == "DIRECT") &&
+          isBuyerMatch &&
           (_repBuyer.isEmpty || p.buyer.toUpperCase() == _repBuyer.toUpperCase()) &&
           (_repBuyerSellerFilter.isEmpty || p.seller.isEmpty || p.seller.toUpperCase() == _repBuyerSellerFilter.toUpperCase()) &&
           _isDateInFY(p.date, _selectedFinancialYear);
     }).toList();
     buyerPayments.sort((a, b) => parseFlexibleDate(a.date).compareTo(parseFlexibleDate(b.date)));
 
-    final double bTotalQty = buyerTrucks.fold<double>(0.0, (sum, t) => sum + t.qty);
-    final double bTotalBilled = buyerTrucks.fold<double>(0.0, (sum, t) => sum + (t.buyerBill > 0 ? t.buyerBill : t.supplierBill)) + (buyerOpeningDue > 0 ? buyerOpeningDue : 0.0);
-    final double bTotalReceived = buyerPayments.fold<double>(0.0, (sum, p) => sum + p.amount);
-    final double bDiscount = buyerPayments.fold<double>(0.0, (sum, p) => sum + p.settlement);
-    final double bCommissionAdjusted = buyerPayments.fold<double>(0.0, (sum, p) => sum + p.commissionAdjusted);
-    final double bPendingBalance = bTotalBilled - bTotalReceived - bDiscount - bCommissionAdjusted;
+    final List<Map<String, dynamic>> rawBuyerReportRows = [];
+    Map<String, List<PaymentEntry>> truckLinkedBuyerPayments = {};
+    List<PaymentEntry> unallocatedBuyerPayments = [];
 
-    List<Map<String, dynamic>> buyerReportRows = [];
-    List<PaymentEntry> unallocatedBuyerPayments = List.from(buyerPayments);
-
-    if (buyerOpeningDue > 0) {
-      buyerReportRows.add({
-        'truck': TruckEntry(id: 'VIRTUAL_OB', state: _selectedState, date: '01-04-${(fyStart.year % 100).toString().padLeft(2, '0')}', truck: 'B/F', supplier: 'PREVIOUS YEAR DUE', buyer: _repBuyer, transporter: '—', type: 'OPENING BAL', qty: 0, supplierBill: 0, buyerBill: buyerOpeningDue, commission: 0, transportExp: 0, freight: 0, advance: 0),
-        'payments': <dynamic>[],
-        'date': '01-04-${(fyStart.year % 100).toString().padLeft(2, '0')}',
-        'seller': 'OPENING BALANCE (B/F)',
-        'qty': '0', 'bill': money(buyerOpeningDue), 'balance': money(buyerOpeningDue),
-      });
+    for (var p in buyerPayments) {
+      if (p.truckId.isNotEmpty) {
+        truckLinkedBuyerPayments.putIfAbsent(p.truckId, () => []).add(p);
+      } else {
+        unallocatedBuyerPayments.add(p);
+      }
     }
 
     for (int i = 0; i < buyerTrucks.length; i++) {
       final t = buyerTrucks[i];
       double bill = t.buyerBill > 0 ? t.buyerBill : t.supplierBill;
-      List<dynamic> matchedPayments = [];
-      double currentPaidOnRow = 0.0;
-      for (int pIdx = 0; pIdx < unallocatedBuyerPayments.length; pIdx++) {
-        final p = unallocatedBuyerPayments[pIdx];
-        final bool buyerMatch = p.buyer.toUpperCase() == t.buyer.toUpperCase();
-        final bool sellerMatch = p.seller.isEmpty || t.supplier.isEmpty || p.seller.toUpperCase() == t.supplier.toUpperCase();
-        if (buyerMatch && sellerMatch) {
-          matchedPayments.add(p);
-          currentPaidOnRow += p.amount + p.settlement + p.commissionAdjusted;
-          unallocatedBuyerPayments.removeAt(pIdx);
-          pIdx--;
-          if (currentPaidOnRow >= bill && i < buyerTrucks.length - 1) break;
+      List<dynamic> matchedPayments = List.from(truckLinkedBuyerPayments[t.id] ?? []);
+      double currentPaidOnRow = matchedPayments.fold<double>(0.0, (s, p) => s + p.amount + p.settlement + p.commissionAdjusted);
+
+      if (currentPaidOnRow < bill) {
+        for (int pIdx = 0; pIdx < unallocatedBuyerPayments.length; pIdx++) {
+          final p = unallocatedBuyerPayments[pIdx];
+          final bool buyerMatch = p.buyer.toUpperCase() == t.buyer.toUpperCase();
+          final bool sellerMatch = p.seller.isNotEmpty && t.supplier.isNotEmpty && p.seller.toUpperCase() == t.supplier.toUpperCase();
+
+          if (buyerMatch && sellerMatch) {
+            matchedPayments.add(p);
+            currentPaidOnRow += p.amount + p.settlement + p.commissionAdjusted;
+            unallocatedBuyerPayments.removeAt(pIdx);
+            pIdx--;
+            if (currentPaidOnRow >= bill && i < buyerTrucks.length - 1) break;
+          }
         }
       }
+
       double paidSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.amount);
       double discSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.settlement);
       double commAdjSum = matchedPayments.fold<double>(0.0, (s, p) => s + p.commissionAdjusted);
       double rowBalance = bill - paidSum - discSum - commAdjSum;
 
-      buyerReportRows.add({
-        'truck': t, 'payments': matchedPayments, 'date': formatDisplayDate(t.date),
-        'seller': t.supplier.isEmpty ? '-' : t.supplier, 'qty': numFmt(t.qty),
-        'bill': money(bill), 'balance': money(rowBalance),
+      rawBuyerReportRows.add({
+        'truck': t,
+        'payments': matchedPayments,
+        'date': formatDisplayDate(t.date),
+        'seller': t.supplier.isEmpty ? '-' : t.supplier,
+        'qty': numFmt(t.qty),
+        'bill': money(bill),
+        'balance': money(rowBalance),
       });
     }
 
-    for (var p in unallocatedBuyerPayments) {
-      buyerReportRows.add({
-        'truck': TruckEntry(id: 'EXTRA_PAY', state: _selectedState, date: p.date, truck: 'PAYMENT', supplier: p.seller, buyer: p.buyer, transporter: '—', type: 'PAYMENT', qty: 0, supplierBill: 0, buyerBill: 0, commission: 0, transportExp: 0, freight: 0, advance: 0),
-        'payments': [p],
-        'date': formatDisplayDate(p.date),
-        'seller': p.seller.isNotEmpty ? p.seller : 'ON ACCOUNT PAYMENT',
-        'qty': '—',
-        'bill': '₹0',
-        'balance': money(-(p.amount + p.settlement + p.commissionAdjusted)),
-      });
-    }
+    final buyerReportRows = rawBuyerReportRows.where((row) {
+      final t = row['truck'] as TruckEntry;
+      final pList = row['payments'] as List<dynamic>;
+      if (_repBuyerFromCtrl.text.trim().isEmpty && _repBuyerToCtrl.text.trim().isEmpty) return true;
+      bool matches = isDateInRange(t.date, _repBuyerFromCtrl.text, _repBuyerToCtrl.text);
+      if (!matches) {
+        for (var p in pList) {
+          if (isDateInRange(p.date, _repBuyerFromCtrl.text, _repBuyerToCtrl.text)) {
+            matches = true;
+            break;
+          }
+        }
+      }
+      return matches;
+    }).toList();
 
-    // 3. Tamil Nadu Operations Summary
+    final double bTotalQty = buyerReportRows.fold<double>(0.0, (sum, row) => sum + (row['truck'] as TruckEntry).qty);
+    final double bTotalBilled = buyerReportRows.fold<double>(0.0, (sum, row) => sum + ((row['truck'] as TruckEntry).buyerBill > 0 ? (row['truck'] as TruckEntry).buyerBill : (row['truck'] as TruckEntry).supplierBill)) + (buyerOpeningDue > 0 ? buyerOpeningDue : 0.0);
+    final double bTotalReceived = buyerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.amount));
+    final double bDiscount = buyerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.settlement));
+    final double bCommissionAdjusted = buyerReportRows.fold<double>(0.0, (sum, row) => sum + (row['payments'] as List<dynamic>).fold<double>(0.0, (s, p) => s + p.commissionAdjusted));
+    final double bPendingBalance = bTotalBilled - bTotalReceived - bDiscount - bCommissionAdjusted;
+
+
+    // ==================== TAMIL NADU SUMMARY ====================
     final tnTrucks = _trucks.where((t) {
       return t.state == 'Tamil Nadu' &&
           (_repStateSeller.isEmpty || t.supplier.toUpperCase() == _repStateSeller.toUpperCase()) &&
@@ -4331,29 +5043,55 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Seller Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
-                  Wrap(
-                    spacing: 10,
-                    children: [
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        onPressed: () => _openSellerReportPrintModal(_repSeller.isEmpty ? "ALL SELLERS" : _repSeller, _repSellerBuyerFilter, sellerReportRows, sTotalQty, sTotalComm, sCalculatedQtyComm, sCombinedTotalCommission, sTotalBilled, sTotalPaid, sBalanceDue),
-                        icon: const Icon(Icons.print_rounded, size: 16),
-                        label: const Text('Print Statement'),
-                      ),
-                      FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        onPressed: _showAllSellersCommissionDialog,
-                        icon: const Icon(Icons.receipt_long_rounded, size: 16),
-                        label: const Text('Commission Summary'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+              isMobile
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Seller Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _openSellerReportPrintModal(_repSeller.isEmpty ? "ALL SELLERS" : _repSeller, _repSellerBuyerFilter, sellerReportRows, sTotalQty, sTotalComm, sCalculatedQtyComm, sCombinedTotalCommission, sTotalBilled, sTotalPaid, sBalanceDue),
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print Statement'),
+                            ),
+                            FilledButton.tonalIcon(
+                              style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: _showAllSellersCommissionDialog,
+                              icon: const Icon(Icons.receipt_long_rounded, size: 16),
+                              label: const Text('Commission Summary'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Seller Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        Wrap(
+                          spacing: 10,
+                          children: [
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _openSellerReportPrintModal(_repSeller.isEmpty ? "ALL SELLERS" : _repSeller, _repSellerBuyerFilter, sellerReportRows, sTotalQty, sTotalComm, sCalculatedQtyComm, sCombinedTotalCommission, sTotalBilled, sTotalPaid, sBalanceDue),
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print Statement'),
+                            ),
+                            FilledButton.tonalIcon(
+                              style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: _showAllSellersCommissionDialog,
+                              icon: const Icon(Icons.receipt_long_rounded, size: 16),
+                              label: const Text('Commission Summary'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
               const SizedBox(height: 16),
               _responsiveRow([
                 Expanded(flex: 3, child: _customAutocomplete('Filter Seller', _sellerNames, _repSeller, 'CHOOSE SELLER', (v) => setState(() { _repSeller = v; _repSellerBuyerFilter = ""; }))),
@@ -4367,6 +5105,78 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                 Expanded(flex: 2, child: _customField('To Date', _repSellerToCtrl, hint: 'DD-MM-YY', icon: Icons.calendar_today_outlined, onTap: () => _selectDateForController(_repSellerToCtrl))),
               ]),
               const SizedBox(height: 16),
+
+              // ==================== SELLER ADVANCE BANNER ====================
+              if (_repSeller.isNotEmpty && unallocatedSellerPayments.isNotEmpty) ...[
+                ...unallocatedSellerPayments.map((p) => Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFDE68A)),
+                    boxShadow: const [BoxShadow(color: Color(0x06000000), blurRadius: 4, offset: Offset(0, 2))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.account_balance_wallet_rounded, size: 18, color: Color(0xFFB45309)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: RichText(
+                          text: TextSpan(
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF0F172A)),
+                            children: [
+                              const TextSpan(
+                                text: 'SELLER ADVANCE: ',
+                                style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFB45309), letterSpacing: 0.5),
+                              ),
+                              TextSpan(
+                                text: '${money(p.amount)} ',
+                                style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF047857), fontSize: 14),
+                              ),
+                              TextSpan(
+                                text: '(${p.mode} on ${formatDisplayDate(p.date)})',
+                                style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF475569)),
+                              ),
+                              if (p.buyer.isNotEmpty)
+                                TextSpan(
+                                  text: '  •  Target Buyer: ${p.buyer}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0284C7)),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF047857)),
+                        tooltip: 'Edit Advance',
+                        onPressed: () => _editPaymentEntryDialog(p),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                        tooltip: 'Delete Advance',
+                        onPressed: () async {
+                          if (await _confirmDelete(context, 'Advance Payment of ${money(p.amount)}')) {
+                            setState(() {
+                              _payments.remove(p);
+                              _calculateOverdueBills(_trucks);
+                            });
+                            _commitToLocalDrive();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                )),
+              ],
+
               _repSeller.isEmpty
                   ? Container(
                       width: double.infinity,
@@ -4398,7 +5208,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                     2: FlexColumnWidth(1.4),
                                     3: FlexColumnWidth(1.4),
                                     4: FlexColumnWidth(1.5),
-                                    5: FlexColumnWidth(2.6),
+                                    5: FlexColumnWidth(3.2),
                                     6: FlexColumnWidth(1.5),
                                     7: FlexColumnWidth(1.1),
                                   },
@@ -4429,28 +5239,189 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                           _tableData(row['commission']),
                                           _tableData(row['sellerBill'], isBold: true),
                                           Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                                             child: pList.isEmpty
                                                 ? const Text('—', style: TextStyle(color: Color(0xFF94A3B8)))
                                                 : Column(
                                                     crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: pList.map((p) => Text('${money(p.amount)} (${p.mode} on ${formatDisplayDate(p.date)})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF047857)))).toList(),
+                                                    children: pList.map((p) => Padding(
+                                                      padding: const EdgeInsets.symmetric(vertical: 2),
+                                                      child: Row(
+                                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                                        children: [
+                                                          Expanded(
+                                                            child: Text(
+                                                              _formatPaymentSummary(p),
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                fontWeight: FontWeight.bold,
+                                                                color: p.amount == 0 && p.settlement > 0 ? const Color(0xFFB45309) : const Color(0xFF047857),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 6),
+                                                          InkWell(
+                                                            onTap: () => _editPaymentEntryDialog(p),
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            child: const Padding(
+                                                              padding: EdgeInsets.all(2.0),
+                                                              child: Icon(Icons.edit_outlined, size: 14, color: Color(0xFF047857)),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 4),
+                                                          InkWell(
+                                                            onTap: () async {
+                                                              if (await _confirmDelete(context, 'Payment of ${money(p.amount)}')) {
+                                                                setState(() {
+                                                                  _payments.remove(p);
+                                                                  _calculateOverdueBills(_trucks);
+                                                                });
+                                                                _commitToLocalDrive();
+                                                              }
+                                                            },
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            child: const Padding(
+                                                              padding: EdgeInsets.all(2.0),
+                                                              child: Icon(Icons.delete_outline, size: 14, color: Colors.red),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    )).toList(),
                                                   ),
                                           ),
                                           _tableData(row['balance'], isBold: true, color: const Color(0xFF047857)),
                                           Padding(
                                             padding: const EdgeInsets.symmetric(vertical: 4),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                if (t.id != 'VIRTUAL_OB' && t.id != 'EXTRA_PAY') ...[
-                                                  IconButton(icon: const Icon(Icons.edit, size: 16, color: Color(0xFF047857)), onPressed: () => _editFromReport(t)),
-                                                  IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), onPressed: () {
-                                                    setState(() => _trucks.remove(t));
-                                                    _commitToLocalDrive();
-                                                  }),
+                                            child: ConstrainedBox(
+                                              constraints: const BoxConstraints(minWidth: 120, maxWidth: 150),
+                                              child: Wrap(
+                                                spacing: 4,
+                                                runSpacing: 4,
+                                                alignment: WrapAlignment.end,
+                                                children: [
+                                                  if (t.id == 'EXTRA_PAY_SELLER' || t.id == 'EXTRA_PAY') ...[
+                                                    IconButton(
+                                                      constraints: const BoxConstraints(),
+                                                      padding: const EdgeInsets.all(4),
+                                                      icon: const Icon(Icons.edit, size: 16, color: Color(0xFF047857)),
+                                                      tooltip: 'Edit Advance Payment',
+                                                      onPressed: () {
+                                                        if (pList.isNotEmpty) {
+                                                          _editPaymentEntryDialog(pList.first);
+                                                        }
+                                                      },
+                                                    ),
+                                                    IconButton(
+                                                      constraints: const BoxConstraints(),
+                                                      padding: const EdgeInsets.all(4),
+                                                      icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                                                      tooltip: 'Delete Advance Payment',
+                                                      onPressed: () async {
+                                                        if (pList.isNotEmpty && await _confirmDelete(context, 'Advance Payment of ${money(pList.first.amount)}')) {
+                                                          setState(() {
+                                                            _payments.remove(pList.first);
+                                                            _calculateOverdueBills(_trucks);
+                                                          });
+                                                          _commitToLocalDrive();
+                                                        }
+                                                      },
+                                                    ),
+                                                  ] else if (t.id != 'VIRTUAL_OB') ...[
+                                                    // Pay Button (Hidden if balance is 0 or fully paid)
+                                                    if (double.tryParse(row['balance'].toString().replaceAll(RegExp(r'[^0-9.-]'), '')) != 0) ...[
+                                                      SizedBox(
+                                                        height: 26,
+                                                        child: OutlinedButton(
+                                                          style: OutlinedButton.styleFrom(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                                                            side: const BorderSide(color: Color(0xFF047857)),
+                                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                                          ),
+                                                          onPressed: () {
+                                                            double paidSum = pList.fold<double>(0.0, (s, p) => s + p.amount + p.settlement + p.commissionAdjusted);
+                                                            double due = (t.supplierBill - paidSum).clamp(0.0, double.infinity);
+                                                            if (due <= 0) due = t.supplierBill;
+                                                            _markCustomBillAsPaid(t, due, isBuyerSide: false);
+                                                          },
+                                                          child: const Text('Pay', style: TextStyle(fontSize: 10, color: Color(0xFF047857), fontWeight: FontWeight.bold)),
+                                                        ),
+                                                      ),
+                                                    ],
+
+                                                    // Convert / Edit to Invoice Button
+                                                    IconButton(
+                                                      constraints: const BoxConstraints(),
+                                                      padding: const EdgeInsets.all(4),
+                                                      icon: const Icon(Icons.receipt_long_rounded, size: 16, color: Color(0xFF2563EB)),
+                                                      tooltip: 'Convert / Edit as Tax Invoice',
+                                                      onPressed: () {
+                                                        setState(() {
+                                                          _selectedTab = 'invoice';
+                                                          _editingTruckId = null;
+                                                          _editingInvoiceId = t.isInvoice ? t.id : null;
+                                                          
+                                                          _iDateCtrl.text = t.date;
+                                                          _iBuyer = t.buyer;
+                                                          _iSeller = t.supplier == '—' ? '' : t.supplier;
+                                                          _iTransporter = t.transporter == '—' ? '' : t.transporter;
+                                                          _iLorryCtrl.text = t.truck == '—' ? '' : t.truck;
+                                                          _iSellerAmountCtrl.text = t.supplierBill > 0 ? t.supplierBill.toStringAsFixed(0) : '';
+                                                          _iTransportExpCtrl.text = t.transportExp > 0 ? t.transportExp.toStringAsFixed(0) : '';
+                                                          _iFreightCtrl.text = t.freight > 0 ? t.freight.toStringAsFixed(0) : '';
+                                                          _iAdvCtrl.text = t.advance > 0 ? t.advance.toStringAsFixed(0) : '';
+                                                          _iCommCtrl.text = t.commission > 0 ? t.commission.toStringAsFixed(0) : '';
+                                                          _iBagsCtrl.text = t.bags > 0 ? t.bags.toStringAsFixed(0) : '0';
+                                                          _iBagRateCtrl.text = t.bagRate > 0 ? t.bagRate.toStringAsFixed(0) : '0';
+                                                          _iLoadRateCtrl.text = t.loadRate > 0 ? t.loadRate.toStringAsFixed(0) : '0';
+                                                          _iInsCtrl.text = t.insurance > 0 ? t.insurance.toStringAsFixed(0) : '0';
+                                                          _iAmcCtrl.text = t.amc > 0 ? t.amc.toStringAsFixed(0) : '0';
+                                                          _iLoadingManual = t.isLoadManual;
+                                                          _iLoadManualAmountCtrl.text = t.loadManualAmt > 0 ? t.loadManualAmt.toStringAsFixed(0) : '0';
+
+                                                          final matchedBuyer = _parties.firstWhere(
+                                                            (p) => p.name.toUpperCase() == t.buyer.toUpperCase(),
+                                                            orElse: () => Party(name: "", type: "", phone: "", address: ""),
+                                                          );
+                                                          _iAddressCtrl.text = matchedBuyer.address;
+                                                          _iPhoneCtrl.text = matchedBuyer.phone;
+
+                                                          for (var it in _invoiceGoods) { it.dispose(); }
+                                                          _invoiceGoods.clear();
+                                                          _addGoodsRow(
+                                                            desc: t.type.isNotEmpty ? t.type : "COCONUT",
+                                                            qty: t.qty > 0 ? t.qty.toStringAsFixed(0) : '',
+                                                            rate: t.rate > 0 ? t.rate.toStringAsFixed(0) : '',
+                                                          );
+                                                        });
+                                                      },
+                                                    ),
+
+                                                    // Standard Edit
+                                                    IconButton(
+                                                      constraints: const BoxConstraints(),
+                                                      padding: const EdgeInsets.all(4),
+                                                      icon: const Icon(Icons.edit, size: 16, color: Color(0xFF047857)),
+                                                      tooltip: 'Edit Logistics Entry',
+                                                      onPressed: () => _editFromReport(t),
+                                                    ),
+
+                                                    // Standard Delete
+                                                    IconButton(
+                                                      constraints: const BoxConstraints(),
+                                                      padding: const EdgeInsets.all(4),
+                                                      icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                                                      tooltip: 'Delete Entry',
+                                                      onPressed: () async {
+                                                        if (await _confirmDelete(context, 'Logistics entry for ${t.buyer}')) {
+                                                          setState(() => _trucks.remove(t));
+                                                          _commitToLocalDrive();
+                                                        }
+                                                      },
+                                                    ),
+                                                  ],
                                                 ],
-                                              ],
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -4501,18 +5472,38 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Buyer Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                    onPressed: () => _openBuyerReportPrintModal(_repBuyer.isEmpty ? "ALL BUYERS" : _repBuyer, _repBuyerSellerFilter, buyerReportRows, bTotalQty, bTotalBilled, bTotalReceived, bPendingBalance),
-                    icon: const Icon(Icons.print_rounded, size: 16),
-                    label: const Text('Print Statement'),
-                  ),
-                ],
-              ),
+              isMobile
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Buyer Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _openBuyerReportPrintModal(_repBuyer.isEmpty ? "ALL BUYERS" : _repBuyer, _repBuyerSellerFilter, buyerReportRows, bTotalQty, bTotalBilled, bTotalReceived, bPendingBalance),
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print Statement'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Buyer Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                          onPressed: () => _openBuyerReportPrintModal(_repBuyer.isEmpty ? "ALL BUYERS" : _repBuyer, _repBuyerSellerFilter, buyerReportRows, bTotalQty, bTotalBilled, bTotalReceived, bPendingBalance),
+                          icon: const Icon(Icons.print_rounded, size: 16),
+                          label: const Text('Print Statement'),
+                        ),
+                      ],
+                    ),
               const SizedBox(height: 16),
               _responsiveRow([
                 Expanded(flex: 3, child: _customAutocomplete('Filter Buyer', _buyerNames, _repBuyer, 'CHOOSE BUYER', (v) => setState(() { _repBuyer = v; _repBuyerSellerFilter = ""; }))),
@@ -4524,6 +5515,78 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                 Expanded(flex: 2, child: _customField('To Date', _repBuyerToCtrl, hint: 'DD-MM-YY', icon: Icons.calendar_today_outlined, onTap: () => _selectDateForController(_repBuyerToCtrl))),
               ]),
               const SizedBox(height: 16),
+
+              // ==================== BUYER ADVANCE BANNER ====================
+              if (_repBuyer.isNotEmpty && unallocatedBuyerPayments.isNotEmpty) ...[
+                ...unallocatedBuyerPayments.map((p) => Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFA7F3D0)),
+                    boxShadow: const [BoxShadow(color: Color(0x06000000), blurRadius: 4, offset: Offset(0, 2))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD1FAE5),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.account_balance_wallet_rounded, size: 18, color: Color(0xFF047857)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: RichText(
+                          text: TextSpan(
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF0F172A)),
+                            children: [
+                              const TextSpan(
+                                text: 'BUYER ADVANCE / ON-ACCOUNT: ',
+                                style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF047857), letterSpacing: 0.5),
+                              ),
+                              TextSpan(
+                                text: '${money(p.amount)} ',
+                                style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF047857), fontSize: 14),
+                              ),
+                              TextSpan(
+                                text: '(${p.mode} on ${formatDisplayDate(p.date)})',
+                                style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF475569)),
+                              ),
+                              if (p.seller.isNotEmpty)
+                                TextSpan(
+                                  text: '  •  Target Seller: ${p.seller}',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0284C7)),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF047857)),
+                        tooltip: 'Edit Advance',
+                        onPressed: () => _editPaymentEntryDialog(p),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                        tooltip: 'Delete Advance',
+                        onPressed: () async {
+                          if (await _confirmDelete(context, 'Advance Receipt of ${money(p.amount)}')) {
+                            setState(() {
+                              _payments.remove(p);
+                              _calculateOverdueBills(_trucks);
+                            });
+                            _commitToLocalDrive();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                )),
+              ],
+
               _repBuyer.isEmpty
                   ? Container(
                       width: double.infinity,
@@ -4554,7 +5617,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                     1: FlexColumnWidth(2.2),
                                     2: FlexColumnWidth(1.4),
                                     3: FlexColumnWidth(1.5),
-                                    4: FlexColumnWidth(2.6),
+                                    4: FlexColumnWidth(3.2),
                                     5: FlexColumnWidth(1.5),
                                     6: FlexColumnWidth(1.0),
                                   },
@@ -4583,12 +5646,55 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                           _tableData(row['qty'] == '0' ? '—' : '${row['qty']} NUTS'),
                                           _tableData(row['bill'], isBold: true),
                                           Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                                             child: pList.isEmpty
                                                 ? const Text('—', style: TextStyle(color: Color(0xFF94A3B8)))
                                                 : Column(
                                                     crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: pList.map((p) => Text('${money(p.amount)} (${p.mode} on ${formatDisplayDate(p.date)})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF047857)))).toList(),
+                                                    children: pList.map((p) => Padding(
+                                                      padding: const EdgeInsets.symmetric(vertical: 2),
+                                                      child: Row(
+                                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                                        children: [
+                                                          Expanded(
+                                                            child: Text(
+                                                              _formatPaymentSummary(p),
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                fontWeight: FontWeight.bold,
+                                                                color: p.amount == 0 && p.settlement > 0 ? const Color(0xFFB45309) : const Color(0xFF047857),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 6),
+                                                          InkWell(
+                                                            onTap: () => _editPaymentEntryDialog(p),
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            child: const Padding(
+                                                              padding: EdgeInsets.all(2.0),
+                                                              child: Icon(Icons.edit_outlined, size: 14, color: Color(0xFF047857)),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 4),
+                                                          InkWell(
+                                                            onTap: () async {
+                                                              if (await _confirmDelete(context, 'Payment of ${money(p.amount)}')) {
+                                                                setState(() {
+                                                                  _payments.remove(p);
+                                                                  _calculateOverdueBills(_trucks);
+                                                                });
+                                                                _commitToLocalDrive();
+                                                              }
+                                                            },
+                                                            borderRadius: BorderRadius.circular(4),
+                                                            child: const Padding(
+                                                              padding: EdgeInsets.all(2.0),
+                                                              child: Icon(Icons.delete_outline, size: 14, color: Colors.red),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    )).toList(),
                                                   ),
                                           ),
                                           _tableData(row['balance'], isBold: true, color: const Color(0xFF047857)),
@@ -4597,13 +5703,11 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
                                             child: Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                if (t.id != 'VIRTUAL_OB' && t.id != 'EXTRA_PAY') ...[
-                                                  IconButton(icon: const Icon(Icons.edit, size: 16, color: Color(0xFF047857)), onPressed: () => _editFromReport(t)),
-                                                  IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), onPressed: () {
-                                                    setState(() => _trucks.remove(t));
-                                                    _commitToLocalDrive();
-                                                  }),
-                                                ],
+                                                IconButton(icon: const Icon(Icons.edit, size: 16, color: Color(0xFF047857)), onPressed: () => _editFromReport(t)),
+                                                IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red), onPressed: () {
+                                                  setState(() => _trucks.remove(t));
+                                                  _commitToLocalDrive();
+                                                }),
                                               ],
                                             ),
                                           ),
@@ -4729,7 +5833,8 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> with WindowListener
       ],
     );
   }
-String _getMonthName(int month) {
+
+  String _getMonthName(int month) {
     const months = [
       "",
       "JANUARY",
@@ -4747,7 +5852,8 @@ String _getMonthName(int month) {
     ];
     return (month >= 1 && month <= 12) ? months[month] : "";
   }
-  // ---------------- 6. TRANSPORT VIEW (MONTHLY STATEMENT & SORTING) ----------------
+
+  // ---------------- 6. TRANSPORT VIEW (TYPE-SAFE MONTHLY STATEMENT) ----------------
   String _getTruckBillMonth(dynamic t) {
     final dt = parseFlexibleDate(t.date);
     return "${_getMonthName(dt.month)} ${dt.year}";
@@ -4792,7 +5898,6 @@ String _getMonthName(int month) {
     return ["ALL MONTHS", ...sorted];
   }
 
-  // ---------------- 6. TRANSPORT VIEW (TYPE-SAFE MONTHLY STATEMENT) ----------------
   Widget _buildTransportView() {
     final filterTrans = _analysisTransporter.trim().toUpperCase();
     final allMonthsList = _getAvailableFinancialMonths();
@@ -4913,32 +6018,61 @@ String _getMonthName(int month) {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Transporter Monthly Freight Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
-                  Wrap(
-                    spacing: 10,
-                    children: [
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        onPressed: () => _showRecordTransportPaymentDialog(),
-                        icon: const Icon(Icons.payment_rounded, size: 16),
-                        label: const Text('Record Monthly Payment'),
-                      ),
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        onPressed: () => _openTransportReportPrintModal(
-                          _analysisTransporter.isEmpty ? "ALL TRANSPORTERS" : _analysisTransporter,
-                          monthlySummaryRows, grandTotalExp, grandTotalPaid, grandTotalBalance,
+              isMobile
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Transporter Monthly Freight Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _showRecordTransportPaymentDialog(),
+                              icon: const Icon(Icons.payment_rounded, size: 16),
+                              label: const Text('Record Monthly Payment'),
+                            ),
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _openTransportReportPrintModal(
+                                _analysisTransporter.isEmpty ? "ALL TRANSPORTERS" : _analysisTransporter,
+                                monthlySummaryRows, grandTotalExp, grandTotalPaid, grandTotalBalance,
+                              ),
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print Statement'),
+                            ),
+                          ],
                         ),
-                        icon: const Icon(Icons.print_rounded, size: 16),
-                        label: const Text('Print Statement'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Transporter Monthly Freight Statement', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                        Wrap(
+                          spacing: 10,
+                          children: [
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _showRecordTransportPaymentDialog(),
+                              icon: const Icon(Icons.payment_rounded, size: 16),
+                              label: const Text('Record Monthly Payment'),
+                            ),
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF062317), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                              onPressed: () => _openTransportReportPrintModal(
+                                _analysisTransporter.isEmpty ? "ALL TRANSPORTERS" : _analysisTransporter,
+                                monthlySummaryRows, grandTotalExp, grandTotalPaid, grandTotalBalance,
+                              ),
+                              icon: const Icon(Icons.print_rounded, size: 16),
+                              label: const Text('Print Statement'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
               const SizedBox(height: 16),
 
               _responsiveRow([
@@ -5026,7 +6160,7 @@ String _getMonthName(int month) {
                           DataColumn(label: Text('FREIGHT EXPENSE', style: TextStyle(fontWeight: FontWeight.bold))),
                         ],
                         rows: (singleMonthData?['trips'] as List<dynamic>? ?? []).map((t) => DataRow(cells: [
-                          DataCell(Text(t.date)),
+                          DataCell(Text(formatDisplayDate(t.date))),
                           DataCell(Text(t.truck, style: const TextStyle(fontWeight: FontWeight.bold))),
                           DataCell(Text(t.transporter)),
                           DataCell(Text(t.supplier)),
@@ -5058,7 +6192,7 @@ String _getMonthName(int month) {
                           DataColumn(label: Text('AMOUNT PAID', style: TextStyle(fontWeight: FontWeight.bold))),
                         ],
                         rows: (singleMonthData?['payments'] as List<TransportPayment>? ?? []).map((p) => DataRow(cells: [
-                          DataCell(Text(p.date)),
+                          DataCell(Text(formatDisplayDate(p.date))),
                           DataCell(Text(p.transporter, style: const TextStyle(fontWeight: FontWeight.bold))),
                           DataCell(Text(p.bank)),
                           DataCell(Text(p.billMonth.isNotEmpty ? p.billMonth : _selectedTransportMonth, style: const TextStyle(color: Color(0xFF047857), fontWeight: FontWeight.bold))),
@@ -5311,7 +6445,7 @@ String _getMonthName(int month) {
                 ]),
                 ...rows.map((row) {
                   return pw.TableRow(children: [
-                    pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(row['monthDisplay'], style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
+                    pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(row['month'] ?? '', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
                     pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text('${row['tripsCount']} Trips', style: const pw.TextStyle(fontSize: 8.5))),
                     pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(pdfMoney(row['expense']), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8.5))),
                     pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(pdfMoney(row['paid']), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
@@ -5374,6 +6508,7 @@ String _getMonthName(int month) {
     final double b2TotalCharges = b2LoadingAmount + b2Amc + b2Comm + b2BagsTotal + b2Freight;
     final double b2GrandTotal = b2BaseTotal + b2TotalCharges;
     final double b2PerNutValue = b2Qty > 0 ? (b2GrandTotal / b2Qty) : 0;
+    final double rawDivisor = double.tryParse(_b2DivisorCtrl.text) ?? 1000;    
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -5806,7 +6941,18 @@ String _getMonthName(int month) {
                   pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFF2F7F3)), children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('DATE', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('BUYER', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('QTY (NUTS)', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('COMMISSION', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('SELLER BILL', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('PAID WITH DATE & BANK', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('BALANCE', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)))]),
                   ...rows.map((row) {
                     final List<dynamic> pList = row['payments'] as List<dynamic>;
-                    String paidText = pList.isEmpty ? '-' : pList.map((p) => "Rs. ${pdfMoney(p.amount)} (${p.mode} on ${p.date})").join('\n');
+                    String paidText = pList.isEmpty
+    ? '-'
+    : pList.map((p) {
+        final dt = formatDisplayDate(p.date);
+        if (p.amount == 0 && p.settlement > 0) {
+          return "Rs. ${pdfMoney(p.settlement)} (SETTLEMENT on $dt)";
+        }
+        if (p.amount > 0 && p.settlement > 0) {
+          return "Rs. ${pdfMoney(p.amount)} (${p.mode}) + Rs. ${pdfMoney(p.settlement)} (SETTLEMENT) on $dt";
+        }
+        return "Rs. ${pdfMoney(p.amount)} (${p.mode} on $dt)";
+      }).join('\n');
                     return pw.TableRow(children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['date'], style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['buyer'], style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('${row['qty']} NUTS', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['commission'].replaceAll('₹', 'Rs. '), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['sellerBill'].replaceAll('₹', 'Rs. '), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(paidText, style: pw.TextStyle(fontSize: 7.5, color: titleGreen, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['balance'].replaceAll('₹', 'Rs. '), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)))]);
                   }),
                   pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFEBF5EE)), children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('TOTAL', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('-', style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('${numFmt(totalQty)} NUTS', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(totalComm)}', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(totalBilled)}', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(totalPaid)}', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(balanceDue)}', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen)))]),
@@ -5927,7 +7073,18 @@ String _getMonthName(int month) {
                   pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFF2F7F3)), children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('DATE', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('SELLER', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('QTY (NUTS)', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('BILL', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('PAID WITH DATE & BANK / DIRECT', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('BALANCE', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)))]),
                   ...rows.map((row) {
                     final List<dynamic> pList = row['payments'] as List<dynamic>;
-                    String paidText = pList.isEmpty ? '-' : pList.map((p) => "Rs. ${pdfMoney(p.amount)} (${p.mode} on ${p.date})").join('\n');
+                    String paidText = pList.isEmpty
+    ? '-'
+    : pList.map((p) {
+        final dt = formatDisplayDate(p.date);
+        if (p.amount == 0 && p.settlement > 0) {
+          return "Rs. ${pdfMoney(p.settlement)} (SETTLEMENT on $dt)";
+        }
+        if (p.amount > 0 && p.settlement > 0) {
+          return "Rs. ${pdfMoney(p.amount)} (${p.mode}) + Rs. ${pdfMoney(p.settlement)} (SETTLEMENT) on $dt";
+        }
+        return "Rs. ${pdfMoney(p.amount)} (${p.mode} on $dt)";
+      }).join('\n');
                     return pw.TableRow(children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['date'], style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['seller'] ?? '-', style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('${row['qty']} NUTS', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['bill'].replaceAll('₹', 'Rs. '), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(paidText, style: pw.TextStyle(fontSize: 7.5, color: titleGreen, fontWeight: pw.FontWeight.bold))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text(row['balance'].replaceAll('₹', 'Rs. '), textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)))]);
                   }),
                   pw.TableRow(decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFEBF5EE)), children: [pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('TOTAL', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('-', style: const pw.TextStyle(fontSize: 8))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('${numFmt(totalQty)} NUTS', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(totalBilled)}', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(totalPaid)}', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen))), pw.Padding(padding: const pw.EdgeInsets.all(3.5), child: pw.Text('Rs. ${pdfMoney(balanceDue)}', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: titleGreen)))]),
@@ -6430,25 +7587,7 @@ String _getMonthName(int month) {
                           SingleChildScrollView(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: const Color(0xFFE2E8F0)),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: SwitchListTile(
-                                    activeColor: const Color(0xFF047857),
-                                    title: const Text('Auto-Sync on Application Exit', style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
-                                    subtitle: const Text('Silently commits and uploads database on window close.', style: TextStyle(color: Color(0xFF64748B))),
-                                    value: _autoSyncOnExit,
-                                    onChanged: (v) async {
-                                      final prefs = await SharedPreferences.getInstance();
-                                      await prefs.setBool('auto_sync_on_exit', v);
-                                      setState(() => _autoSyncOnExit = v);
-                                      setSettingsState(() {});
-                                    },
-                                  ),
-                                ),
+                              children: [                                
                                 const SizedBox(height: 18),
                                 const Text('MANUAL LOCAL FILE BACKUP', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF64748B), letterSpacing: 0.8)),
                                 const SizedBox(height: 10),
@@ -6550,16 +7689,27 @@ String _getMonthName(int month) {
                                         const SizedBox(width: 12),
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              const Text('Connected Account', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
-                                              Text(
-                                                GoogleDriveService.currentUserEmail ?? 'Active Google Session',
-                                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF064E3B)),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ],
-                                          ),
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    const Text('Connected Account', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
+    Text(
+      GoogleDriveService.currentUserEmail ?? 'Active Google Session',
+      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF064E3B)),
+      overflow: TextOverflow.ellipsis,
+    ),
+    const SizedBox(height: 4),
+    Row(
+      children: [
+        const Icon(Icons.sync_rounded, size: 12, color: Color(0xFF047857)),
+        const SizedBox(width: 4),
+        Text(
+          'Last Synced: $_lastSyncTime',
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF047857)),
+        ),
+      ],
+    ),
+  ],
+)
                                         ),
                                         ElevatedButton.icon(
                                           style: ElevatedButton.styleFrom(
@@ -7067,6 +8217,7 @@ class _CustomAutocompleteFieldState extends State<_CustomAutocompleteField> {
   @override
   void initState() {
     super.initState();
+
     _controller = TextEditingController(text: widget.currentVal);
   }
 
