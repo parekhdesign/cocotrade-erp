@@ -1,15 +1,21 @@
-name: Build iPad IPA
+name: Build iOS IPA for Scarlet
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build Unsigned IPA
     runs-on: macos-14
-
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -20,20 +26,20 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build Unsigned iOS Release
+      - name: Build iOS Application
         run: flutter build ios --release --no-codesign
 
-      - name: Package IPA
+      - name: Package App into IPA for Scarlet
         run: |
           cd build/ios/iphoneos
-          mkdir Payload
+          mkdir -p Payload
           cp -r Runner.app Payload/
-          zip -r CocoTrade-iPad.ipa Payload
-          mv CocoTrade-iPad.ipa ../../../
+          zip -yr1 CocoTradeERP.ipa Payload
+          ls -lh CocoTradeERP.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cocotrade-ipad-ipa
-          path: CocoTrade-iPad.ipa
-          retention-days: 5
+          name: CocoTradeERP-iPad
+          path: build/ios/iphoneos/CocoTradeERP.ipa
+          retention-days: 7
