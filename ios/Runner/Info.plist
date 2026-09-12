@@ -60,6 +60,7 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
+	
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
@@ -72,5 +73,18 @@
   		<string>https</string>
 	</array>
 	</array>
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleTypeRole</key>
+        <string>Editor</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <!-- Reversed client ID from Google console -->
+            <string>com.googleusercontent.apps.1011382913553-qad37lf843tnj68r1cp720bel0scgkdm</string>
+        </array>
+    </dict>
+</array>
+	
 </dict>
 </plist>
