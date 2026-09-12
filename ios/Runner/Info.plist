@@ -79,9 +79,8 @@
         <key>CFBundleTypeRole</key>
         <string>Editor</string>
         <key>CFBundleURLSchemes</key>
-        <array>
-            <!-- Reversed client ID from Google console -->
-           <string>com.googleusercontent.apps.1011382913553-qad37lf843tnj68r1cp720bel0scgkdm</string>
+        <array>         
+	<string>1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com</string>
         </array>
     </dict>
 </array>

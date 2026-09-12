@@ -32,6 +32,10 @@ jobs:
       - name: Package App into IPA for Scarlet
         run: |
           cd build/ios/iphoneos
+          # Copy the plist directly into the built .app bundle
+          if [ -f ../../../ios/Runner/GoogleService-Info.plist ]; then
+            cp ../../../ios/Runner/GoogleService-Info.plist Runner.app/
+          fi
           mkdir -p Payload
           cp -r Runner.app Payload/
           zip -yr1 CocoTradeERP.ipa Payload

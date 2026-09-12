@@ -289,7 +289,10 @@ class GoogleDriveService {
       _cachedUserEmail = prefs.getString(_emailPrefsKey);
 
       if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-        final GoogleSignIn googleSignIn = GoogleSignIn(scopes: _scopes);
+        final GoogleSignIn googleSignIn = GoogleSignIn(
+  clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
+  scopes: _scopes,
+);
         final account = await googleSignIn.signInSilently();
         if (account != null) {
           final authHeaders = await account.authHeaders;
@@ -330,7 +333,10 @@ class GoogleDriveService {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-        final GoogleSignIn googleSignIn = GoogleSignIn(scopes: _scopes);
+        final GoogleSignIn googleSignIn = GoogleSignIn(
+  clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
+  scopes: _scopes,
+);
         try { await googleSignIn.signOut(); } catch (_) {}
 
         final account = await googleSignIn.signIn();
@@ -374,7 +380,10 @@ class GoogleDriveService {
   static Future<void> signOut() async {
     try {
       if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-        final GoogleSignIn googleSignIn = GoogleSignIn(scopes: _scopes);
+        final GoogleSignIn googleSignIn = GoogleSignIn(
+  clientId: Platform.isIOS ? '1011382913553-qad37lf843tnj68r1cp720bel0scgkdm.apps.googleusercontent.com' : null,
+  scopes: _scopes,
+);
         await googleSignIn.signOut();
       } else {
         _client?.close();
