@@ -151,7 +151,14 @@ class _CloudRestoreSetupScreenState extends State<CloudRestoreSetupScreen> {
                       onPressed: () async {
   setState(() => _isConnecting = true);
   try {
-    bool signedIn = await GoogleDriveService.signIn();
+    // Safely attempt sign-in
+    bool signedIn = false;
+    try {
+      signedIn = await GoogleDriveService.signIn();
+    } catch (signinErr) {
+      debugPrint("Sign-in exception caught: $signinErr");
+    }
+
     if (!signedIn) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -161,13 +168,20 @@ class _CloudRestoreSetupScreenState extends State<CloudRestoreSetupScreen> {
       return;
     }
 
-    Map<String, dynamic>? cloudData = await GoogleDriveService.downloadDatabase();
+    // Safely attempt database download
+    Map<String, dynamic>? cloudData;
+    try {
+      cloudData = await GoogleDriveService.downloadDatabase();
+    } catch (downloadErr) {
+      debugPrint("Download exception caught: $downloadErr");
+    }
+
     if (cloudData == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: Colors.orange.shade800,
-            content: Text('Connected as ${GoogleDriveService.currentUserEmail}, but cocotrade_backup.json was not found.'),
+            content: Text('Connected, but cocotrade_backup.json was not found or unreadable.'),
           ),
         );
       }
@@ -7765,27 +7779,28 @@ _paySelectedTruckId = ""; // Reset after saving
                                         : const Icon(Icons.cloud_upload_rounded),
                                     label: const Text('Backup to Drive'),
                                     onPressed: isSyncing
-                                        ? null
-                                        : () async {
-                                            setSettingsState(() => isSyncing = true);
-                                            try {
-                                              final jsonStr = _generateFullDatabaseJson();
-                                              final success = await GoogleDriveService.uploadDatabase(jsonStr);
-                                              if (success && mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Database backed up to Google Drive!')),
-                                                );
-                                              }
-                                            } catch (e) {
-                                              if (mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  SnackBar(backgroundColor: Colors.red, content: Text('Backup failed: $e')),
-                                                );
-                                              }
-                                            } finally {
-                                              setSettingsState(() => isSyncing = false);
-                                            }
-                                          },
+    ? null
+    : () async {
+        setSettingsState(() => isSyncing = true);
+        try {
+          final jsonStr = _generateFullDatabaseJson();
+          final success = await GoogleDriveService.uploadDatabase(jsonStr);
+          if (success && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Database backed up to Google Drive!')),
+            );
+          }
+        } catch (e) {
+          debugPrint("Safe backup error catch: $e");
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(backgroundColor: Colors.red, content: Text('Backup failed safely: $e')),
+            );
+          }
+        } finally {
+          setSettingsState(() => isSyncing = false);
+        }
+      },
                                   ),
                                   const SizedBox(height: 10),
                                   OutlinedButton.icon(
@@ -7798,46 +7813,47 @@ _paySelectedTruckId = ""; // Reset after saving
                                         : const Icon(Icons.cloud_download_rounded),
                                     label: const Text('Restore from Drive'),
                                     onPressed: isSyncing
-                                        ? null
-                                        : () async {
-                                            final confirm = await showDialog<bool>(
-                                              context: context,
-                                              builder: (c) => AlertDialog(
-                                                title: const Text('Restore from Cloud?'),
-                                                content: const Text('This replaces your current local database with the cloud backup. Proceed?'),
-                                                actions: [
-                                                  TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-                                                  FilledButton(
-                                                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857)),
-                                                    onPressed: () => Navigator.pop(c, true),
-                                                    child: const Text('Restore'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
+    ? null
+    : () async {
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Restore from Cloud?'),
+            content: const Text('This replaces your current local database with the cloud backup. Proceed?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF047857)),
+                onPressed: () => Navigator.pop(c, true),
+                child: const Text('Restore'),
+              ),
+            ],
+          ),
+        );
 
-                                            if (confirm == true) {
-                                              setSettingsState(() => isSyncing = true);
-                                              try {
-                                                final remoteData = await GoogleDriveService.downloadDatabase();
-                                                if (remoteData != null) {
-                                                  _applyStateFromMap(remoteData);
-                                                  Navigator.pop(ctx);
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Data restored successfully!')),
-                                                  );
-                                                }
-                                              } catch (e) {
-                                                if (mounted) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(backgroundColor: Colors.red, content: Text('Restore failed: $e')),
-                                                  );
-                                                }
-                                              } finally {
-                                                setSettingsState(() => isSyncing = false);
-                                              }
-                                            }
-                                          },
+        if (confirm == true) {
+          setSettingsState(() => isSyncing = true);
+          try {
+            final remoteData = await GoogleDriveService.downloadDatabase();
+            if (remoteData != null) {
+              _applyStateFromMap(remoteData);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(backgroundColor: Color(0xFF047857), content: Text('Data restored successfully!')),
+              );
+            }
+          } catch (e) {
+            debugPrint("Safe restore error catch: $e");
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(backgroundColor: Colors.red, content: Text('Restore failed safely: $e')),
+              );
+            }
+          } finally {
+            setSettingsState(() => isSyncing = false);
+          }
+        }
+      },
                                   ),
                                 ] else ...[
                                   FilledButton.icon(
